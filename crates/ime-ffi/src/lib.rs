@@ -1,0 +1,284 @@
+//! C ABI over [`ime_engine`]. This is the **macOS contract**: the IMK `.app`
+//! links this as a static library and calls these functions in-process.
+//!
+//! Conventions (librime `rime_api.h` style):
+//!   - `RimeEngine` / `RimeSession` are opaque, heap-allocated handles.
+//!   - All strings are UTF-8, NUL-terminated. Returned `const char*` are owned by
+//!     the session and remain valid until the next mutating call on that session;
+//!     the caller copies out immediately.
+//!   - The cloud-AI conversion is asynchronous and callback-free: `begin` returns
+//!     a request id and the frontend polls. (Stubbed until M2.)
+//!
+//! Regenerate the header after changing signatures:
+//!   `cargo run -p xtask -- gen-header`
+
+use ime_engine::{Engine, Key, Session};
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::path::PathBuf;
+
+/// Bump when the ABI changes in a backward-incompatible way.
+const ABI_VERSION: u32 = 1;
+
+/// Opaque process-global engine handle.
+pub struct RimeEngine {
+    inner: Engine,
+}
+
+/// Opaque per-input-context session handle.
+///
+/// The C-string caches keep returned `const char*` pointers valid until the next
+/// mutating call (`process_key` / `select_candidate` / `reset`).
+pub struct RimeSession {
+    inner: Session,
+    preedit_c: CString,
+    commit_c: CString,
+    candidates_c: Vec<CString>,
+}
+
+impl RimeSession {
+    /// Rebuild the C-string caches from the engine session's current state.
+    fn refresh(&mut self) {
+        self.preedit_c = to_cstring(self.inner.preedit());
+        self.commit_c = to_cstring(self.inner.commit_text());
+        self.candidates_c = self.inner.candidates().iter().map(|s| to_cstring(s)).collect();
+    }
+}
+
+/// UTF-8 -> CString, stripping interior NULs (which can't occur in our text but
+/// must be handled to avoid a panic at the FFI boundary).
+fn to_cstring(s: &str) -> CString {
+    match CString::new(s) {
+        Ok(c) => c,
+        Err(_) => CString::new(s.replace('\0', "")).unwrap_or_default(),
+    }
+}
+
+/// SAFETY: `p` is null or a valid NUL-terminated C string.
+unsafe fn cstr_to_pathbuf(p: *const c_char) -> Option<PathBuf> {
+    if p.is_null() {
+        return None;
+    }
+    let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+    if s.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(s))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+/// Create an engine. `config_dir`/`user_data_dir` may be NULL. The returned
+/// pointer must be freed with [`rime_engine_free`].
+#[no_mangle]
+pub extern "C" fn rime_engine_new(
+    config_dir: *const c_char,
+    user_data_dir: *const c_char,
+) -> *mut RimeEngine {
+    let config = unsafe { cstr_to_pathbuf(config_dir) };
+    let user = unsafe { cstr_to_pathbuf(user_data_dir) };
+    Box::into_raw(Box::new(RimeEngine {
+        inner: Engine::new(config, user),
+    }))
+}
+
+/// Free an engine created by [`rime_engine_new`]. NULL is ignored.
+#[no_mangle]
+pub extern "C" fn rime_engine_free(engine: *mut RimeEngine) {
+    if !engine.is_null() {
+        drop(unsafe { Box::from_raw(engine) });
+    }
+}
+
+/// Start a new input session. Returns NULL if `engine` is NULL. Free with
+/// [`rime_session_free`]. The engine must outlive all its sessions.
+#[no_mangle]
+pub extern "C" fn rime_session_new(engine: *mut RimeEngine) -> *mut RimeSession {
+    let engine = match unsafe { engine.as_ref() } {
+        Some(e) => e,
+        None => return std::ptr::null_mut(),
+    };
+    let mut session = Box::new(RimeSession {
+        inner: engine.inner.new_session(),
+        preedit_c: CString::default(),
+        commit_c: CString::default(),
+        candidates_c: Vec::new(),
+    });
+    session.refresh();
+    Box::into_raw(session)
+}
+
+/// Free a session created by [`rime_session_new`]. NULL is ignored.
+#[no_mangle]
+pub extern "C" fn rime_session_free(session: *mut RimeSession) {
+    if !session.is_null() {
+        drop(unsafe { Box::from_raw(session) });
+    }
+}
+
+/// Clear all composition state for the session.
+#[no_mangle]
+pub extern "C" fn rime_session_reset(session: *mut RimeSession) {
+    if let Some(s) = unsafe { session.as_mut() } {
+        s.inner.reset();
+        s.refresh();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Key processing & read-back
+// ---------------------------------------------------------------------------
+
+/// Feed one platform-neutral key event. Returns a `RimeResultFlags` bitmask
+/// (see the engine's `flags` module): CONSUMED=1, PREEDIT=2, CANDIDATES=4,
+/// COMMIT=8. Returns 0 if `session` is NULL.
+#[no_mangle]
+pub extern "C" fn rime_process_key(session: *mut RimeSession, keysym: u32, mods: u32) -> u32 {
+    let s = match unsafe { session.as_mut() } {
+        Some(s) => s,
+        None => return 0,
+    };
+    let flags = s.inner.process_key(Key::new(keysym, mods));
+    s.refresh();
+    flags
+}
+
+/// The current preedit (composition) string. Valid until the next mutating call.
+#[no_mangle]
+pub extern "C" fn rime_get_preedit(session: *const RimeSession) -> *const c_char {
+    match unsafe { session.as_ref() } {
+        Some(s) => s.preedit_c.as_ptr(),
+        None => std::ptr::null(),
+    }
+}
+
+/// Number of conversion candidates.
+#[no_mangle]
+pub extern "C" fn rime_get_candidate_count(session: *const RimeSession) -> usize {
+    unsafe { session.as_ref() }
+        .map(|s| s.candidates_c.len())
+        .unwrap_or(0)
+}
+
+/// The candidate string at `index`, or NULL if out of range. Valid until the
+/// next mutating call.
+#[no_mangle]
+pub extern "C" fn rime_get_candidate_text(
+    session: *const RimeSession,
+    index: usize,
+) -> *const c_char {
+    match unsafe { session.as_ref() } {
+        Some(s) => s
+            .candidates_c
+            .get(index)
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null()),
+        None => std::ptr::null(),
+    }
+}
+
+/// Index of the highlighted candidate.
+#[no_mangle]
+pub extern "C" fn rime_get_highlighted_index(session: *const RimeSession) -> usize {
+    unsafe { session.as_ref() }
+        .map(|s| s.inner.highlighted())
+        .unwrap_or(0)
+}
+
+/// Commit the candidate at `index`. Returns a result-flags bitmask.
+#[no_mangle]
+pub extern "C" fn rime_select_candidate(session: *mut RimeSession, index: usize) -> u32 {
+    match unsafe { session.as_mut() } {
+        Some(s) => {
+            let flags = s.inner.select_candidate(index);
+            s.refresh();
+            flags
+        }
+        None => 0,
+    }
+}
+
+/// Text to commit after a key event set the COMMIT flag. Valid until the next
+/// mutating call; empty string if nothing to commit.
+#[no_mangle]
+pub extern "C" fn rime_get_commit_text(session: *const RimeSession) -> *const c_char {
+    match unsafe { session.as_ref() } {
+        Some(s) => s.commit_c.as_ptr(),
+        None => std::ptr::null(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud-AI conversion (asynchronous, pull model). Stubbed until M2.
+// ---------------------------------------------------------------------------
+
+/// Begin an asynchronous cloud-AI conversion of the current input, passing the
+/// surrounding document text as context. Returns a request id to poll, or 0 if
+/// AI conversion is unavailable. **M0/M1: always returns 0 (not yet wired).**
+#[no_mangle]
+pub extern "C" fn rime_begin_ai_convert(
+    session: *mut RimeSession,
+    _context_before: *const c_char,
+    _context_after: *const c_char,
+) -> u64 {
+    let _ = unsafe { session.as_mut() };
+    0
+}
+
+/// Poll a conversion started by [`rime_begin_ai_convert`].
+/// Returns: 0 = pending, 1 = ready (candidates updated), -1 = error/unavailable
+/// (the frontend should fall back to the local converter).
+/// **M0/M1: always returns -1.**
+#[no_mangle]
+pub extern "C" fn rime_poll_ai_result(_session: *mut RimeSession, _req_id: u64) -> i32 {
+    -1
+}
+
+/// The C ABI version. Frontends should check this matches what they were built
+/// against.
+#[no_mangle]
+pub extern "C" fn rime_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    /// Exercise the full handle lifecycle through the C ABI, mirroring what the
+    /// macOS frontend does: create engine -> session -> type "ka" -> Enter ->
+    /// read commit text.
+    #[test]
+    fn ffi_echo_roundtrip() {
+        let engine = rime_engine_new(std::ptr::null(), std::ptr::null());
+        assert!(!engine.is_null());
+        let session = rime_session_new(engine);
+        assert!(!session.is_null());
+
+        rime_process_key(session, 'k' as u32, 0);
+        rime_process_key(session, 'a' as u32, 0);
+        let preedit = unsafe { CStr::from_ptr(rime_get_preedit(session)) };
+        assert_eq!(preedit.to_str().unwrap(), "ka");
+
+        let flags = rime_process_key(session, ime_engine::keysym::RETURN, 0);
+        assert!(flags & ime_engine::flags::COMMIT != 0);
+        let commit = unsafe { CStr::from_ptr(rime_get_commit_text(session)) };
+        assert_eq!(commit.to_str().unwrap(), "ka");
+
+        rime_session_free(session);
+        rime_engine_free(engine);
+    }
+
+    #[test]
+    fn null_handles_are_safe() {
+        assert_eq!(rime_process_key(std::ptr::null_mut(), 0x61, 0), 0);
+        assert!(rime_get_preedit(std::ptr::null()).is_null());
+        assert_eq!(rime_get_candidate_count(std::ptr::null()), 0);
+        rime_session_free(std::ptr::null_mut());
+        rime_engine_free(std::ptr::null_mut());
+    }
+}

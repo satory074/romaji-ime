@@ -1,0 +1,12 @@
+[package]
+name = "ime-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "IPC message types and framing between the Windows TSF DLL and ime-server."
+
+[dependencies]
+serde.workspace = true
+bincode.workspace = true

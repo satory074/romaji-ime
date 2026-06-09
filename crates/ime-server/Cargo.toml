@@ -1,0 +1,18 @@
+[package]
+name = "ime-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Out-of-process engine host for the Windows TSF frontend (named-pipe server)."
+
+[[bin]]
+name = "ime-server"
+path = "src/main.rs"
+
+[dependencies]
+ime-engine = { path = "../ime-engine" }
+ime-ipc = { path = "../ime-ipc" }
+# M1 (Windows): `windows`/`windows-sys` for the named-pipe transport, behind
+# `[target.'cfg(windows)'.dependencies]`.

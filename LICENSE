@@ -1,0 +1,20 @@
+Copyright (c) 2026 satory074. All rights reserved.
+
+This software and its source code are proprietary and confidential.
+A specific open-source or commercial license has not yet been chosen for this
+project (closed-source / commercial distribution is being kept open as an
+option). Until a license is declared here, no rights to use, copy, modify, or
+distribute this code are granted.
+
+Third-party components are used under their own permissive licenses and remain
+compatible with closed-source/commercial distribution, notably:
+  - wana_kana (romaji<->kana)        : MIT
+  - vibrato   (Viterbi tokenizer)    : Apache-2.0 / MIT
+  - SudachiDict (dictionary data)    : Apache-2.0
+  - rusqlite / SQLite                : MIT / Public Domain
+
+Components with copyleft/share-alike terms are deliberately NOT bundled, e.g.:
+  - GPL MeCab dictionaries
+  - CC-BY-SA Zenzai model weights
+The AI "magic conversion" headline feature uses cloud LLM APIs, so no model
+weights are redistributed with this software.

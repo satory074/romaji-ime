@@ -1,0 +1,30 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Generated C ABI header is committed on purpose (see crates/ime-ffi/include/),
+# but the build-time copy under target/ is not.
+
+# macOS
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+/platform/macos/**/build/
+
+# Windows / Visual Studio build output
+/platform/windows/**/x64/
+/platform/windows/**/Win32/
+/platform/windows/**/Debug/
+/platform/windows/**/Release/
+/platform/windows/**/*.user
+/platform/windows/**/.vs/
+
+# Dictionary source downloads (large; fetched by the dict build tool)
+/dict/source/
+
+# Secrets / local config (LLM API keys must never be committed)
+.env
+*.local.toml
+secrets.toml

@@ -1,0 +1,12 @@
+[package]
+name = "ime-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "OS-independent core engine for the romaji IME (romaji->kana, session, converters)."
+
+[dependencies]
+# M0 has no dependencies — the core stays pure and trivially unit-testable.
+# M1+ will add: wana_kana (romaji<->kana), and later vibrato / rusqlite / reqwest+tokio.

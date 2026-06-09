@@ -1,0 +1,40 @@
+# Workspace root for the cross-platform AI romaji IME.
+#
+# Layout (see docs / plan):
+#   crates/ime-engine  - OS-independent core (romaji->kana, session, converters). Pure Rust, unit-testable.
+#   crates/ime-ffi     - C ABI shim (cdylib + staticlib). The macOS contract. cbindgen -> romaji_ime.h
+#   crates/ime-ipc     - IPC message types + framing. The Windows contract.
+#   crates/ime-server  - named-pipe server hosting the engine (Windows separate-process pattern).
+#   dict               - build-time tool: compiles SudachiDict into binary trie/cost tables.
+#   xtask              - dev automation (header gen, dict build, mac packaging).
+[workspace]
+resolver = "2"
+members = [
+    "crates/ime-engine",
+    "crates/ime-ffi",
+    "crates/ime-ipc",
+    "crates/ime-server",
+    "dict",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "LicenseRef-Proprietary"
+publish = false
+
+# Shared dependency versions, referenced from member crates via `dep.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+thiserror = "2"
+wana_kana = "4"
+
+# Release profile tuned for a shipped IME: small, fast, no panic-unwinding noise.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

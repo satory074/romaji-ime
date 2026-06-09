@@ -1,0 +1,17 @@
+[package]
+name = "ime-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "C ABI shim over ime-engine. The macOS contract; cbindgen generates romaji_ime.h."
+
+[lib]
+name = "ime_ffi"
+# staticlib -> libime_ffi.a (linked in-process by the macOS .app, lipo'd universal)
+# cdylib    -> libime_ffi.dylib (alternative dynamic linking / quick experiments)
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+ime-engine = { path = "../ime-engine" }

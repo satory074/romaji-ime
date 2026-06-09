@@ -1,0 +1,15 @@
+[package]
+name = "ime-dict"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Build-time tool: compiles SudachiDict (Apache-2.0) into binary trie / cost tables."
+
+[[bin]]
+name = "ime-dict"
+path = "src/main.rs"
+
+[dependencies]
+# M3: trie/FST builder + cost-matrix encoder. No deps yet.
