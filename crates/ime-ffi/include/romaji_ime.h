@@ -117,19 +117,21 @@ const char *rime_get_commit_text(const struct RimeSession *session);
 /*
  Begin an asynchronous cloud-AI conversion of the current input, passing the
  surrounding document text as context. Returns a request id to poll, or 0 if
- AI conversion is unavailable. **M0/M1: always returns 0 (not yet wired).**
+ AI conversion is unavailable (no converter configured, nothing composing, or
+ candidates already showing). The conversion runs on an internal background
+ thread; call [`rime_poll_ai_result`] on the SAME thread as other session
+ calls until it resolves.
  */
 uint64_t rime_begin_ai_convert(struct RimeSession *session,
-                               const char *_context_before,
-                               const char *_context_after);
+                               const char *context_before,
+                               const char *context_after);
 
 /*
  Poll a conversion started by [`rime_begin_ai_convert`].
- Returns: 0 = pending, 1 = ready (candidates updated), -1 = error/unavailable
- (the frontend should fall back to the local converter).
- **M0/M1: always returns -1.**
+ Returns: 0 = pending, 1 = ready (candidates/preedit updated), -1 = error or
+ unavailable (the frontend should fall back to the local converter).
  */
-int32_t rime_poll_ai_result(struct RimeSession *_session, uint64_t _req_id);
+int32_t rime_poll_ai_result(struct RimeSession *session, uint64_t req_id);
 
 /*
  The C ABI version. Frontends should check this matches what they were built

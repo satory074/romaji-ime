@@ -15,14 +15,17 @@
 //! add the dictionary, Viterbi, and the cloud-AI converter behind the same
 //! [`Session`] surface.
 
+pub mod ai;
 pub mod key;
 pub mod romaji;
 mod session;
 
+pub use ai::{AiPoll, ConvertRequest, Converter};
 pub use key::{flags, keysym, modifiers, Key};
 pub use session::Session;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Process-global engine state.
 ///
@@ -30,27 +33,53 @@ use std::path::PathBuf;
 /// model (one engine, many sessions) is in place from the start. Later it owns
 /// the loaded dictionary, cost model, converter configuration, and the shared
 /// learning database.
-#[derive(Debug, Default)]
+#[derive(Default, Clone)]
 pub struct Engine {
     #[allow(dead_code)]
     config_dir: Option<PathBuf>,
-    #[allow(dead_code)]
     user_data_dir: Option<PathBuf>,
+    /// Cloud-AI converter, if configured. Shared (Arc) so every session can hand
+    /// it to a background thread.
+    converter: Option<Arc<dyn Converter>>,
 }
 
 impl Engine {
     /// Create an engine. `config_dir` points at bundled read-only data
     /// (dictionary, romaji tables); `user_data_dir` is the per-user writable
-    /// location (learning DB, settings). Both are optional in M0.
+    /// location (settings `config.json`, and later the learning DB).
+    ///
+    /// This is pure (no I/O). Frontends attach a cloud-AI converter explicitly,
+    /// typically via [`Engine::with_ai_from_config`].
     pub fn new(config_dir: Option<PathBuf>, user_data_dir: Option<PathBuf>) -> Self {
         Engine {
             config_dir,
             user_data_dir,
+            converter: None,
         }
+    }
+
+    /// Attach a specific converter (used by tests / embedders).
+    pub fn with_converter(mut self, converter: Arc<dyn Converter>) -> Self {
+        self.converter = Some(converter);
+        self
+    }
+
+    /// Attach a cloud-AI converter built from `{user_data_dir}/config.json`
+    /// (falling back to `ROMAJI_IME_*` env vars). No-op if AI isn't configured.
+    pub fn with_ai_from_config(mut self) -> Self {
+        if self.converter.is_none() {
+            self.converter = ai::converter_from_config(self.user_data_dir.as_deref());
+        }
+        self
+    }
+
+    /// Whether cloud-AI conversion is available.
+    pub fn has_ai(&self) -> bool {
+        self.converter.is_some()
     }
 
     /// Start a new input session (one per focused text field / IMK controller).
     pub fn new_session(&self) -> Session {
-        Session::new()
+        Session::new(self.converter.clone())
     }
 }

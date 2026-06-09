@@ -7,6 +7,18 @@ license.workspace = true
 publish = false
 description = "OS-independent core engine for the romaji IME (romaji->kana, session, converters)."
 
+[features]
+default = ["cloud-http"]
+# Real HTTP cloud-AI converter. Off -> only the trait + mock are available, which
+# keeps the dependency footprint (and cross-compile) minimal for tests.
+cloud-http = ["dep:ureq"]
+
 [dependencies]
-# M0 has no dependencies — the core stays pure and trivially unit-testable.
-# M1+ will add: wana_kana (romaji<->kana), and later vibrato / rusqlite / reqwest+tokio.
+serde = { workspace = true }
+serde_json = "1"
+# native-tls picks the platform's TLS (Security.framework on macOS, SChannel on
+# Windows) so it cross-compiles without ring/OpenSSL.
+ureq = { version = "2", default-features = false, features = ["native-tls"], optional = true }
+
+[dev-dependencies]
+# (mock converter lives in unit tests)

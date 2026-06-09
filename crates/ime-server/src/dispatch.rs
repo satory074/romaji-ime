@@ -5,7 +5,7 @@
 //! independent of the named-pipe transport makes it unit-testable on the host
 //! (the Windows pipe is just a byte stream feeding the same logic).
 
-use ime_engine::{Engine, Key, Session};
+use ime_engine::{AiPoll, Engine, Key, Session};
 use ime_ipc::{Request, Response, State};
 use std::collections::HashMap;
 
@@ -49,10 +49,30 @@ impl Dispatcher {
                 self.with_session(sid, |s| s.select_candidate(index as usize))
             }
             Request::Reset { sid } => self.with_session(sid, |s| s.reset()),
-            // Cloud-AI conversion arrives in M2. Until then, report it as
-            // unavailable so the frontend falls back to the local kana.
-            Request::BeginAiConvert { .. } | Request::PollAiResult { .. } => Response::Error {
-                message: "AI conversion not implemented (M2)".to_owned(),
+            Request::BeginAiConvert {
+                sid,
+                context_before,
+                context_after,
+            } => match self.sessions.get_mut(&sid) {
+                Some(s) => match s.begin_ai_convert(context_before, context_after) {
+                    Some(req_id) => Response::AiBegun { req_id },
+                    None => Response::Error {
+                        message: "AI conversion unavailable".to_owned(),
+                    },
+                },
+                None => Response::Error {
+                    message: format!("unknown session {sid}"),
+                },
+            },
+            Request::PollAiResult { sid, req_id } => match self.sessions.get_mut(&sid) {
+                Some(s) => match s.poll_ai_result(req_id) {
+                    AiPoll::Pending => Response::Pending,
+                    AiPoll::Ready => Response::State(state_of(s, 0)),
+                    AiPoll::Error(message) => Response::Error { message },
+                },
+                None => Response::Error {
+                    message: format!("unknown session {sid}"),
+                },
             },
         }
     }

@@ -24,7 +24,8 @@ const PIPE_NAME: &str = r"\\.\pipe\romaji_ime";
 
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
-    let engine = Engine::new(None, None);
+    // Cloud-AI converter from config.json / env (the headline feature).
+    let engine = Engine::new(None, None).with_ai_from_config();
     let mut dispatcher = Dispatcher::new(engine);
     eprintln!("ime-server listening on {PIPE_NAME}");
     pipe_win::run(PIPE_NAME, &mut dispatcher)
@@ -39,7 +40,7 @@ fn main() {
     use ime_engine::{flags, keysym};
     use ime_ipc::{Request, Response};
 
-    let mut dispatcher = Dispatcher::new(Engine::new(None, None));
+    let mut dispatcher = Dispatcher::new(Engine::new(None, None).with_ai_from_config());
     let sid = match dispatcher.handle(Request::NewSession) {
         Response::SessionId { sid } => sid,
         other => panic!("expected SessionId, got {other:?}"),

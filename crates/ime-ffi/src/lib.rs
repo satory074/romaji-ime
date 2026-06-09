@@ -12,7 +12,7 @@
 //! Regenerate the header after changing signatures:
 //!   `cargo run -p xtask -- gen-header`
 
-use ime_engine::{Engine, Key, Session};
+use ime_engine::{AiPoll, Engine, Key, Session};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
@@ -73,14 +73,20 @@ fn to_cstring(s: &str) -> CString {
 
 /// SAFETY: `p` is null or a valid NUL-terminated C string.
 unsafe fn cstr_to_pathbuf(p: *const c_char) -> Option<PathBuf> {
-    if p.is_null() {
-        return None;
-    }
-    let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+    let s = cstr_to_string(p);
     if s.is_empty() {
         None
     } else {
         Some(PathBuf::from(s))
+    }
+}
+
+/// SAFETY: `p` is null or a valid NUL-terminated C string. NULL -> "".
+unsafe fn cstr_to_string(p: *const c_char) -> String {
+    if p.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(p).to_string_lossy().into_owned()
     }
 }
 
@@ -98,7 +104,8 @@ pub extern "C" fn rime_engine_new(
     let config = unsafe { cstr_to_pathbuf(config_dir) };
     let user = unsafe { cstr_to_pathbuf(user_data_dir) };
     Box::into_raw(Box::new(RimeEngine {
-        inner: Engine::new(config, user),
+        // Attach the cloud-AI converter from config.json / env if configured.
+        inner: Engine::new(config, user).with_ai_from_config(),
     }))
 }
 
@@ -234,24 +241,42 @@ pub extern "C" fn rime_get_commit_text(session: *const RimeSession) -> *const c_
 
 /// Begin an asynchronous cloud-AI conversion of the current input, passing the
 /// surrounding document text as context. Returns a request id to poll, or 0 if
-/// AI conversion is unavailable. **M0/M1: always returns 0 (not yet wired).**
+/// AI conversion is unavailable (no converter configured, nothing composing, or
+/// candidates already showing). The conversion runs on an internal background
+/// thread; call [`rime_poll_ai_result`] on the SAME thread as other session
+/// calls until it resolves.
 #[no_mangle]
 pub extern "C" fn rime_begin_ai_convert(
     session: *mut RimeSession,
-    _context_before: *const c_char,
-    _context_after: *const c_char,
+    context_before: *const c_char,
+    context_after: *const c_char,
 ) -> u64 {
-    let _ = unsafe { session.as_mut() };
-    0
+    let s = match unsafe { session.as_mut() } {
+        Some(s) => s,
+        None => return 0,
+    };
+    let before = unsafe { cstr_to_string(context_before) };
+    let after = unsafe { cstr_to_string(context_after) };
+    s.inner.begin_ai_convert(before, after).unwrap_or(0)
 }
 
 /// Poll a conversion started by [`rime_begin_ai_convert`].
-/// Returns: 0 = pending, 1 = ready (candidates updated), -1 = error/unavailable
-/// (the frontend should fall back to the local converter).
-/// **M0/M1: always returns -1.**
+/// Returns: 0 = pending, 1 = ready (candidates/preedit updated), -1 = error or
+/// unavailable (the frontend should fall back to the local converter).
 #[no_mangle]
-pub extern "C" fn rime_poll_ai_result(_session: *mut RimeSession, _req_id: u64) -> i32 {
-    -1
+pub extern "C" fn rime_poll_ai_result(session: *mut RimeSession, req_id: u64) -> i32 {
+    let s = match unsafe { session.as_mut() } {
+        Some(s) => s,
+        None => return -1,
+    };
+    match s.inner.poll_ai_result(req_id) {
+        AiPoll::Pending => 0,
+        AiPoll::Ready => {
+            s.refresh();
+            1
+        }
+        AiPoll::Error(_) => -1,
+    }
 }
 
 /// The C ABI version. Frontends should check this matches what they were built
