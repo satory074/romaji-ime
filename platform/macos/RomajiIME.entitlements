@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Sandbox for distribution. Local dev builds are ad-hoc signed without
+         sandbox; enable this for Developer ID / notarized builds (M5). -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- Required for IMKServer's NSConnection to register under sandbox. Must
+         equal InputMethodConnectionName. -->
+    <key>com.apple.security.temporary-exception.mach-register.global-name</key>
+    <string>com.satory074.inputmethod.RomajiIME_Connection</string>
+    <!-- The cloud-AI converter (M2) needs outbound network. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

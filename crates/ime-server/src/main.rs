@@ -3,47 +3,68 @@
 //! The thin TSF DLL (loaded into every app) forwards key events here over a
 //! named pipe; this process owns the engine and does all the heavy work
 //! (dictionary, Viterbi, and the slow cloud-LLM round-trip) off the apps'
-//! threads, which gives both crash isolation and a non-blocking input path.
+//! threads, giving both crash isolation and a non-blocking input path.
 //!
-//! **M0**: a self-check that links the engine + IPC types and runs the echo
-//! engine once, proving the crate graph builds (including cross-compiled to a
-//! Windows target). The named-pipe transport lands in M1.
+//! The request/response logic lives in [`dispatch`] (host-testable); the named
+//! pipe (`pipe_win`, Windows only) merely supplies a byte stream to
+//! [`transport::serve_connection`].
 
-use ime_engine::{flags, keysym, Engine, Key};
-use ime_ipc::{Request, Response, State};
+mod dispatch;
+#[cfg(windows)]
+mod pipe_win;
+mod transport;
 
-/// Run the engine over a request stream. In M1 this is fed by the named-pipe
-/// transport; in M0 we drive it with a fixed script to validate the wiring.
-fn handle_in_memory_demo() -> State {
+use dispatch::Dispatcher;
+use ime_engine::Engine;
+
+/// The per-user named pipe. M4 will randomize/secure this name to prevent
+/// squatting (as Mozc/Weasel do).
+#[cfg(windows)]
+const PIPE_NAME: &str = r"\\.\pipe\romaji_ime";
+
+#[cfg(windows)]
+fn main() -> std::io::Result<()> {
     let engine = Engine::new(None, None);
-    let mut session = engine.new_session();
-
-    // Type "ka", then commit with Enter (M0 engine echoes input).
-    for ch in "ka".chars() {
-        session.process_key(Key::new(ch as u32, 0));
-    }
-    let last_flags = session.process_key(Key::new(keysym::RETURN, 0));
-
-    State {
-        flags: last_flags,
-        preedit: session.preedit().to_owned(),
-        commit: session.commit_text().to_owned(),
-        candidates: session.candidates().to_vec(),
-        highlighted: session.highlighted() as u64,
-    }
+    let mut dispatcher = Dispatcher::new(engine);
+    eprintln!("ime-server listening on {PIPE_NAME}");
+    pipe_win::run(PIPE_NAME, &mut dispatcher)
 }
 
+/// Off-Windows there is no named pipe; run a dispatcher self-check so
+/// `cargo run -p ime-server` still demonstrates the engine wiring on the dev
+/// host (and `cargo check --target x86_64-pc-windows-msvc` validates the
+/// Windows path separately).
+#[cfg(not(windows))]
 fn main() {
-    let state = handle_in_memory_demo();
+    use ime_engine::{flags, keysym};
+    use ime_ipc::{Request, Response};
 
-    // Touch the IPC request/response enums so the dependency is exercised and
-    // the wire types stay in scope as the contract evolves.
-    let _ = (Request::NewSession, Response::State(state.clone()));
+    let mut dispatcher = Dispatcher::new(Engine::new(None, None));
+    let sid = match dispatcher.handle(Request::NewSession) {
+        Response::SessionId { sid } => sid,
+        other => panic!("expected SessionId, got {other:?}"),
+    };
+    for ch in "ka".chars() {
+        dispatcher.handle(Request::ProcessKey {
+            sid,
+            keysym: ch as u32,
+            mods: 0,
+        });
+    }
+    let resp = dispatcher.handle(Request::ProcessKey {
+        sid,
+        keysym: keysym::RETURN,
+        mods: 0,
+    });
 
-    println!("ime-server M0 self-check");
-    println!("  commit = {:?}", state.commit);
-    println!("  COMMIT flag set = {}", state.flags & flags::COMMIT != 0);
-    assert_eq!(state.commit, "ka");
-    assert!(state.flags & flags::COMMIT != 0);
-    println!("  OK");
+    println!("ime-server self-check (dispatcher, non-Windows host)");
+    match resp {
+        Response::State(state) => {
+            println!("  commit = {:?}", state.commit);
+            assert_eq!(state.commit, "か");
+            assert!(state.flags & flags::COMMIT != 0);
+            println!("  OK");
+        }
+        other => panic!("expected State, got {other:?}"),
+    }
 }

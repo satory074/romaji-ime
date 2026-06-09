@@ -74,8 +74,8 @@ pub struct State {
 
 /// Write one length-prefixed bincode frame.
 pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
-    let bytes = bincode::serialize(msg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        bincode::serialize(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if bytes.len() as u64 > MAX_FRAME_LEN as u64 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

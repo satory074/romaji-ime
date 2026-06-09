@@ -14,5 +14,13 @@ path = "src/main.rs"
 [dependencies]
 ime-engine = { path = "../ime-engine" }
 ime-ipc = { path = "../ime-ipc" }
-# M1 (Windows): `windows`/`windows-sys` for the named-pipe transport, behind
-# `[target.'cfg(windows)'.dependencies]`.
+
+# Named-pipe transport, Windows only.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Pipes",
+    "Win32_System_IO",        # OVERLAPPED, needed by ReadFile/WriteFile/ConnectNamedPipe
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }

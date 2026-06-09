@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>RomajiIME</string>
+    <key>CFBundleExecutable</key>
+    <string>RomajiIME</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.satory074.inputmethod.RomajiIME</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>RomajiIME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- Input methods are background-only agents (no Dock icon). -->
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- IMK wiring. The connection name MUST be "<bundle id>_Connection" and the
+         controller class MUST match the @objc name of our IMKInputController. -->
+    <key>InputMethodConnectionName</key>
+    <string>com.satory074.inputmethod.RomajiIME_Connection</string>
+    <key>InputMethodServerControllerClass</key>
+    <string>InputController</string>
+
+    <key>tsInputMethodCharacterRepertoireKey</key>
+    <array>
+        <string>Hira</string>
+    </array>
+
+    <!-- One visible Japanese (hiragana) input mode. -->
+    <key>ComponentInputModeDict</key>
+    <dict>
+        <key>tsInputModeListKey</key>
+        <dict>
+            <key>com.satory074.inputmethod.RomajiIME.Japanese</key>
+            <dict>
+                <key>TISInputSourceID</key>
+                <string>com.satory074.inputmethod.RomajiIME.Japanese</string>
+                <key>TISIntendedLanguage</key>
+                <string>ja</string>
+                <key>tsInputModeAlternateMenuTitleStringKey</key>
+                <string>Romaji (Hiragana)</string>
+                <key>tsInputModeCharacterRepertoireKey</key>
+                <array>
+                    <string>Hira</string>
+                </array>
+                <key>tsInputModeIsVisibleKey</key>
+                <true/>
+                <key>tsInputModeKeyEquivalentKey</key>
+                <string></string>
+                <key>tsInputModeKeyEquivalentModifiersKey</key>
+                <integer>0</integer>
+                <key>tsInputModePrimaryInScriptKey</key>
+                <true/>
+                <key>tsInputModeScriptKey</key>
+                <string>smJapanese</string>
+            </dict>
+        </dict>
+        <key>tsVisibleInputModeOrderedArrayKey</key>
+        <array>
+            <string>com.satory074.inputmethod.RomajiIME.Japanese</string>
+        </array>
+    </dict>
+</dict>
+</plist>

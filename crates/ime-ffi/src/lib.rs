@@ -20,6 +20,18 @@ use std::path::PathBuf;
 /// Bump when the ABI changes in a backward-incompatible way.
 const ABI_VERSION: u32 = 1;
 
+// Result-flag bits returned by `rime_process_key` / `rime_select_candidate`,
+// exported into the C header so the Swift (macOS) and C++ (Windows) frontends
+// share these values. Kept in sync with `ime_engine::flags` by `flag_values`.
+/// The IME consumed the key; the host app must not also handle it.
+pub const RIME_CONSUMED: u32 = 1;
+/// The preedit (composition) string changed.
+pub const RIME_PREEDIT: u32 = 2;
+/// The candidate list changed.
+pub const RIME_CANDIDATES: u32 = 4;
+/// There is committed text to fetch and insert.
+pub const RIME_COMMIT: u32 = 8;
+
 /// Opaque process-global engine handle.
 pub struct RimeEngine {
     inner: Engine,
@@ -41,7 +53,12 @@ impl RimeSession {
     fn refresh(&mut self) {
         self.preedit_c = to_cstring(self.inner.preedit());
         self.commit_c = to_cstring(self.inner.commit_text());
-        self.candidates_c = self.inner.candidates().iter().map(|s| to_cstring(s)).collect();
+        self.candidates_c = self
+            .inner
+            .candidates()
+            .iter()
+            .map(|s| to_cstring(s))
+            .collect();
     }
 }
 
@@ -251,9 +268,9 @@ mod tests {
 
     /// Exercise the full handle lifecycle through the C ABI, mirroring what the
     /// macOS frontend does: create engine -> session -> type "ka" -> Enter ->
-    /// read commit text.
+    /// read the converted kana commit text.
     #[test]
-    fn ffi_echo_roundtrip() {
+    fn ffi_romaji_roundtrip() {
         let engine = rime_engine_new(std::ptr::null(), std::ptr::null());
         assert!(!engine.is_null());
         let session = rime_session_new(engine);
@@ -262,15 +279,24 @@ mod tests {
         rime_process_key(session, 'k' as u32, 0);
         rime_process_key(session, 'a' as u32, 0);
         let preedit = unsafe { CStr::from_ptr(rime_get_preedit(session)) };
-        assert_eq!(preedit.to_str().unwrap(), "ka");
+        assert_eq!(preedit.to_str().unwrap(), "か");
 
         let flags = rime_process_key(session, ime_engine::keysym::RETURN, 0);
         assert!(flags & ime_engine::flags::COMMIT != 0);
         let commit = unsafe { CStr::from_ptr(rime_get_commit_text(session)) };
-        assert_eq!(commit.to_str().unwrap(), "ka");
+        assert_eq!(commit.to_str().unwrap(), "か");
 
         rime_session_free(session);
         rime_engine_free(engine);
+    }
+
+    #[test]
+    fn flag_values() {
+        // The C-ABI flag constants must mirror the engine's flags exactly.
+        assert_eq!(RIME_CONSUMED, ime_engine::flags::CONSUMED);
+        assert_eq!(RIME_PREEDIT, ime_engine::flags::PREEDIT);
+        assert_eq!(RIME_CANDIDATES, ime_engine::flags::CANDIDATES);
+        assert_eq!(RIME_COMMIT, ime_engine::flags::COMMIT);
     }
 
     #[test]

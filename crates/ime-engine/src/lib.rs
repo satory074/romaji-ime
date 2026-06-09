@@ -10,12 +10,13 @@
 //! [`Session`], which is a small state machine over the preedit buffer and
 //! candidate list. Key events arrive as platform-neutral [`Key`]s.
 //!
-//! Milestone status: **M0** — the session is a plain echo (typed ASCII goes
-//! into the preedit, Enter commits it). M1 replaces the echo with real
-//! romaji→kana conversion; later milestones add the dictionary, Viterbi, and the
-//! cloud-AI converter behind the same [`Session`] surface.
+//! Milestone status: **M1** — the session converts romaji to hiragana
+//! incrementally (see [`romaji`]); Enter/Space commit the kana. Later milestones
+//! add the dictionary, Viterbi, and the cloud-AI converter behind the same
+//! [`Session`] surface.
 
 pub mod key;
+pub mod romaji;
 mod session;
 
 pub use key::{flags, keysym, modifiers, Key};

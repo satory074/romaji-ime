@@ -58,13 +58,14 @@ impl Key {
 
     /// The printable character this key produces, if any.
     ///
-    /// Returns `None` for control keys, and also when Control/Alt is held (those
-    /// are shortcuts, not text input).
+    /// Returns `None` for control keys, for Space (which the IME treats as a
+    /// command, not romaji input — see [`keysym::SPACE`]), and when Control/Alt
+    /// is held (those are shortcuts, not text input).
     pub fn printable_char(&self) -> Option<char> {
         if self.mods & (modifiers::CONTROL | modifiers::ALT) != 0 {
             return None;
         }
-        if (0x20..=0x7E).contains(&self.sym) {
+        if (0x21..=0x7E).contains(&self.sym) {
             char::from_u32(self.sym)
         } else {
             None

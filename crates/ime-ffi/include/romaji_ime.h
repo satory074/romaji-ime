@@ -12,6 +12,26 @@
 #include <stdlib.h>
 
 /*
+ The IME consumed the key; the host app must not also handle it.
+ */
+#define RIME_CONSUMED 1
+
+/*
+ The preedit (composition) string changed.
+ */
+#define RIME_PREEDIT 2
+
+/*
+ The candidate list changed.
+ */
+#define RIME_CANDIDATES 4
+
+/*
+ There is committed text to fetch and insert.
+ */
+#define RIME_COMMIT 8
+
+/*
  Opaque process-global engine handle.
  */
 typedef struct RimeEngine RimeEngine;

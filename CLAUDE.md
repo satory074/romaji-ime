@@ -90,6 +90,13 @@ cargo check -p ime-server --target i686-pc-windows-msvc
 
 ## Status
 
-**M0 complete**: toolchain, workspace, all crates compiling, stubbed C ABI +
-generated header, dual-output build verified, 13 unit tests passing. The engine
-is currently an **echo** (M1 replaces it with real romaji→kana).
+**M1 complete (both platforms wired end-to-end for romaji→kana):**
+- Core: real incremental romaji→kana in `ime-engine` (`romaji.rs`); 33 workspace tests pass.
+- macOS: `RomajiIME.app` builds (universal), links the engine via the C ABI, launches its
+  IMKServer, installs to `~/Library/Input Methods/`. Build: `platform/macos/build.sh`.
+  (Enabling it + typing in TextEdit is a manual GUI step.)
+- Windows: `ime-server` (Rust) hosts the engine over a named pipe — verified to cross-compile
+  for x86_64/i686-pc-windows-msvc and host-tested via the dispatcher/transport unit tests.
+  The thin C++ TSF DLL (`platform/windows`) is written but builds on Windows/CI (not on macOS).
+
+Next: **M2 — cloud-AI conversion (the headline feature)** + candidate UI on both frontends.

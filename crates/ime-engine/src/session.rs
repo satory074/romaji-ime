@@ -1,25 +1,29 @@
 //! Per-input-context session state machine.
 //!
-//! M0 behaviour is a plain **echo**: printable keys append to the preedit,
-//! Backspace deletes, Enter commits, Escape clears. This exists to prove the
-//! full plumbing (FFI/IPC, registration, preedit/commit rendering) end-to-end on
-//! both OSes before any Japanese-conversion logic is written. M1 swaps the echo
-//! for romaji→kana; the public surface stays the same so the frontends don't
-//! change.
+//! **M1**: the session holds the raw romaji buffer the user has typed and shows
+//! its hiragana transliteration as the preedit (see [`crate::romaji`]). Enter and
+//! Space commit the kana; Backspace edits the romaji; Escape clears. There is no
+//! kanji conversion or candidate list yet — that arrives with the cloud-AI
+//! converter (M2) and the local dictionary converter (M3), both of which will
+//! populate `candidates` without changing this public surface.
 
 use crate::key::{flags, keysym, Key};
+use crate::romaji;
 
 /// State for a single input context.
 #[derive(Debug, Default)]
 pub struct Session {
-    /// The composition string shown underlined in the host app.
+    /// Raw romaji as typed. Reconverted in full on every change.
+    raw: String,
+    /// Cached preedit display = kana(raw) + pending tail (a lone trailing `n`
+    /// is shown as ん). Recomputed by [`Session::recompute`].
     preedit: String,
-    /// Conversion candidates (empty until M2).
+    /// Conversion candidates (empty until M2/M3).
     candidates: Vec<String>,
     /// Index of the highlighted candidate.
     highlighted: usize,
-    /// Text to commit into the document. Only meaningful right after a
-    /// `process_key` that set [`flags::COMMIT`]; cleared on the next key.
+    /// Text to commit, set by the key event that raised [`flags::COMMIT`];
+    /// cleared on the next key.
     commit: String,
 }
 
@@ -48,38 +52,75 @@ impl Session {
         &self.commit
     }
 
-    /// Process one key event and return a [`flags`] bitmask describing what
-    /// changed and whether the key was consumed.
+    /// True when there is no active composition.
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Recompute the cached preedit from the raw buffer.
+    fn recompute(&mut self) {
+        let (kana, pending) = romaji::convert(&self.raw);
+        // Show a lone trailing `n` as ん (tentatively); reconverting the whole
+        // buffer means a following vowel still produces a na-row syllable.
+        self.preedit = if pending == "n" {
+            format!("{kana}ん")
+        } else {
+            format!("{kana}{pending}")
+        };
+    }
+
+    /// Commit the current composition (flushing romaji to kana) and clear it.
+    fn commit_current(&mut self) -> u32 {
+        self.commit = romaji::flush(&self.raw);
+        self.raw.clear();
+        self.recompute();
+        flags::CONSUMED | flags::PREEDIT | flags::COMMIT
+    }
+
+    /// Process one key event and return a [`flags`] bitmask.
     pub fn process_key(&mut self, key: Key) -> u32 {
         // The commit buffer only reflects the current event.
         self.commit.clear();
 
+        // Space is a command, not romaji input.
+        if key.sym == keysym::SPACE {
+            // M1: commit the kana if composing; otherwise let the app insert a
+            // literal space. (M2 turns this into the AI-conversion trigger.)
+            return if self.raw.is_empty() {
+                0
+            } else {
+                self.commit_current()
+            };
+        }
+
         if let Some(c) = key.printable_char() {
-            self.preedit.push(c);
+            self.raw.push(c);
+            self.recompute();
             return flags::CONSUMED | flags::PREEDIT;
         }
 
         match key.sym {
             keysym::BACKSPACE => {
-                if self.preedit.pop().is_some() {
+                if self.raw.pop().is_some() {
+                    self.recompute();
                     flags::CONSUMED | flags::PREEDIT
                 } else {
                     0
                 }
             }
             keysym::RETURN => {
-                if self.preedit.is_empty() {
+                if self.raw.is_empty() {
                     0
                 } else {
-                    self.commit = std::mem::take(&mut self.preedit);
-                    flags::CONSUMED | flags::PREEDIT | flags::COMMIT
+                    self.commit_current()
                 }
             }
             keysym::ESCAPE => {
-                if self.preedit.is_empty() {
+                if self.raw.is_empty() {
                     0
                 } else {
-                    self.preedit.clear();
+                    self.raw.clear();
+                    self.recompute();
                     flags::CONSUMED | flags::PREEDIT
                 }
             }
@@ -87,14 +128,15 @@ impl Session {
         }
     }
 
-    /// Commit the candidate at `index` (no-op in M0 — no candidates yet).
+    /// Commit the candidate at `index` (no-op in M1 — no candidates yet).
     pub fn select_candidate(&mut self, index: usize) -> u32 {
         match self.candidates.get(index) {
             Some(text) => {
                 self.commit = text.clone();
-                self.preedit.clear();
+                self.raw.clear();
                 self.candidates.clear();
                 self.highlighted = 0;
+                self.recompute();
                 flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES | flags::COMMIT
             }
             None => 0,
@@ -103,10 +145,11 @@ impl Session {
 
     /// Clear all composition state.
     pub fn reset(&mut self) -> u32 {
-        self.preedit.clear();
+        self.raw.clear();
         self.candidates.clear();
         self.highlighted = 0;
         self.commit.clear();
+        self.recompute();
         flags::PREEDIT | flags::CANDIDATES
     }
 }
@@ -123,70 +166,87 @@ mod tests {
     }
 
     #[test]
-    fn printable_keys_build_preedit() {
+    fn romaji_becomes_kana_in_preedit() {
         let mut s = Session::new();
-        let f = s.process_key(Key::new('k' as u32, 0));
-        assert_eq!(s.preedit(), "k");
-        assert!(f & flags::CONSUMED != 0);
-        assert!(f & flags::PREEDIT != 0);
+        type_str(&mut s, "ka");
+        assert_eq!(s.preedit(), "か");
+        type_str(&mut s, "ki");
+        assert_eq!(s.preedit(), "かき");
+    }
+
+    #[test]
+    fn the_m1_demo() {
+        let mut s = Session::new();
+        type_str(&mut s, "konnichiha");
+        assert_eq!(s.preedit(), "こんにちは");
+    }
+
+    #[test]
+    fn trailing_n_shows_as_kana_in_preedit() {
+        let mut s = Session::new();
+        type_str(&mut s, "hon");
+        assert_eq!(s.preedit(), "ほん");
+        // a following vowel reinterprets it (whole-buffer reconvert).
         type_str(&mut s, "a");
-        assert_eq!(s.preedit(), "ka");
+        assert_eq!(s.preedit(), "ほな");
     }
 
     #[test]
-    fn backspace_removes_last_char() {
+    fn partial_romaji_shows_as_latin_tail() {
         let mut s = Session::new();
-        type_str(&mut s, "abc");
-        let f = s.process_key(Key::new(keysym::BACKSPACE, 0));
-        assert_eq!(s.preedit(), "ab");
-        assert!(f & flags::PREEDIT != 0);
+        type_str(&mut s, "ky");
+        assert_eq!(s.preedit(), "ky");
+        s.process_key(Key::new('a' as u32, 0));
+        assert_eq!(s.preedit(), "きゃ");
     }
 
     #[test]
-    fn backspace_on_empty_is_not_consumed() {
+    fn backspace_edits_romaji() {
         let mut s = Session::new();
-        assert_eq!(s.process_key(Key::new(keysym::BACKSPACE, 0)), 0);
+        type_str(&mut s, "kya");
+        assert_eq!(s.preedit(), "きゃ");
+        // Backspace drops one raw romaji char: "kya" -> "ky", which is an
+        // incomplete cluster shown as a latin tail.
+        s.process_key(Key::new(keysym::BACKSPACE, 0));
+        assert_eq!(s.preedit(), "ky");
+        s.process_key(Key::new(keysym::BACKSPACE, 0));
+        assert_eq!(s.preedit(), "k");
     }
 
     #[test]
-    fn enter_commits_preedit() {
+    fn enter_commits_flushed_kana() {
         let mut s = Session::new();
-        type_str(&mut s, "hi");
+        type_str(&mut s, "hon");
         let f = s.process_key(Key::new(keysym::RETURN, 0));
         assert!(f & flags::COMMIT != 0);
-        assert_eq!(s.commit_text(), "hi");
+        assert_eq!(s.commit_text(), "ほん"); // trailing n flushed to ん
         assert_eq!(s.preedit(), "");
     }
 
     #[test]
-    fn enter_on_empty_is_passed_through() {
+    fn space_commits_when_composing_else_passes_through() {
         let mut s = Session::new();
-        assert_eq!(s.process_key(Key::new(keysym::RETURN, 0)), 0);
+        // empty: space is not consumed (app inserts a literal space)
+        assert_eq!(s.process_key(Key::new(keysym::SPACE, 0)), 0);
+        // composing: space commits the kana
+        type_str(&mut s, "ka");
+        let f = s.process_key(Key::new(keysym::SPACE, 0));
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "か");
     }
 
     #[test]
-    fn commit_buffer_clears_on_next_key() {
+    fn escape_clears_composition() {
         let mut s = Session::new();
-        type_str(&mut s, "hi");
-        s.process_key(Key::new(keysym::RETURN, 0));
-        assert_eq!(s.commit_text(), "hi");
-        s.process_key(Key::new('x' as u32, 0));
-        assert_eq!(s.commit_text(), "");
-    }
-
-    #[test]
-    fn escape_clears_preedit() {
-        let mut s = Session::new();
-        type_str(&mut s, "hi");
+        type_str(&mut s, "konnichiha");
         let f = s.process_key(Key::new(keysym::ESCAPE, 0));
         assert_eq!(s.preedit(), "");
         assert!(f & flags::PREEDIT != 0);
     }
 
     #[test]
-    fn control_modified_key_is_not_text() {
+    fn control_modified_key_is_ignored() {
         let mut s = Session::new();
-        // Ctrl+a should not insert 'a'.
         let f = s.process_key(Key::new('a' as u32, crate::key::modifiers::CONTROL));
         assert_eq!(f, 0);
         assert_eq!(s.preedit(), "");
