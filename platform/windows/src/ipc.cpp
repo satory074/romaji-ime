@@ -52,6 +52,16 @@ std::wstring Utf8ToWide(const std::string& s) {
     return w;
 }
 
+std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0,
+                                nullptr, nullptr);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr,
+                        nullptr);
+    return s;
+}
+
 // Response variant tags (docs/ipc-protocol.md).
 enum class RespTag : uint32_t {
     SessionId = 0,
@@ -67,6 +77,8 @@ constexpr uint32_t kReqNewSession = 0;
 constexpr uint32_t kReqCloseSession = 1;
 constexpr uint32_t kReqProcessKey = 2;
 constexpr uint32_t kReqReset = 4;
+constexpr uint32_t kReqBeginAiConvert = 5;
+constexpr uint32_t kReqPollAiResult = 6;
 
 State DecodeState(Reader& r) {
     State st;
@@ -199,6 +211,53 @@ void PipeClient::CloseSession(uint64_t sid) {
     PutU32(req, kReqCloseSession);
     PutU64(req, sid);
     (void)Call(req);
+}
+
+std::optional<uint64_t> PipeClient::BeginAiConvert(uint64_t sid, const std::wstring& before,
+                                                   const std::wstring& after) {
+    std::vector<uint8_t> req;
+    PutU32(req, kReqBeginAiConvert);
+    PutU64(req, sid);
+    PutString(req, WideToUtf8(before));
+    PutString(req, WideToUtf8(after));
+    auto resp = Call(req);
+    if (!resp) return std::nullopt;
+    Reader r{resp->data(), resp->data() + resp->size()};
+    if (static_cast<RespTag>(r.U32()) != RespTag::AiBegun || !r.ok) return std::nullopt;
+    uint64_t id = r.U64();
+    return r.ok ? std::optional<uint64_t>(id) : std::nullopt;
+}
+
+PipeClient::PollOutcome PipeClient::PollAiResult(uint64_t sid, uint64_t req_id) {
+    PollOutcome out;
+    std::vector<uint8_t> req;
+    PutU32(req, kReqPollAiResult);
+    PutU64(req, sid);
+    PutU64(req, req_id);
+    auto resp = Call(req);
+    if (!resp) {
+        out.kind = PollKind::Error;
+        return out;
+    }
+    Reader r{resp->data(), resp->data() + resp->size()};
+    RespTag tag = static_cast<RespTag>(r.U32());
+    if (!r.ok) {
+        out.kind = PollKind::Error;
+        return out;
+    }
+    switch (tag) {
+        case RespTag::Pending:
+            out.kind = PollKind::Pending;
+            break;
+        case RespTag::State:
+            out.state = DecodeState(r);
+            out.kind = r.ok ? PollKind::Ready : PollKind::Error;
+            break;
+        default:  // Error / unexpected
+            out.kind = PollKind::Error;
+            break;
+    }
+    return out;
 }
 
 }  // namespace romaji

@@ -43,6 +43,19 @@ public:
     std::optional<State> Reset(uint64_t sid);
     void CloseSession(uint64_t sid);
 
+    // Cloud-AI conversion. Begin returns a request id (or nullopt if
+    // unavailable); poll it until Ready/Error. Run these OFF the UI thread (the
+    // server does a slow LLM call) — see platform/windows/README.md.
+    std::optional<uint64_t> BeginAiConvert(uint64_t sid, const std::wstring& context_before,
+                                           const std::wstring& context_after);
+
+    enum class PollKind { Pending, Ready, Error };
+    struct PollOutcome {
+        PollKind kind = PollKind::Error;
+        State state;  // valid when kind == Ready
+    };
+    PollOutcome PollAiResult(uint64_t sid, uint64_t req_id);
+
 private:
     bool EnsureConnected();
     void Disconnect();

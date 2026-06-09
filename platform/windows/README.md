@@ -48,10 +48,32 @@ Then add **RomajiIME** under Settings ▸ Time & language ▸ Language ▸ Japan
 Keyboards, switch to it, and type e.g. `konnichiha` → こんにちは. Unregister with
 `regsvr32 /u`.
 
-## Scope (M1)
+## Cloud-AI conversion on Windows (design — remaining work)
+
+The engine and IPC fully support AI: `ime-server` handles `BeginAiConvert` /
+`PollAiResult`, and `PipeClient` (here) implements both calls. What remains is
+wiring them into the TIP **without blocking the input thread** — the LLM round
+trip takes ~1–2 s and the DLL runs inside every app, so polling synchronously in
+`OnKeyDown` would freeze the host (the top IME anti-pattern).
+
+Planned flow (to build/iterate on Windows):
+1. On Space while composing, `OnKeyDown` calls `PipeClient::BeginAiConvert` and
+   returns immediately (key eaten); show the kana meanwhile.
+2. A message-only window polls `PollAiResult` on a `WM_TIMER` (off the keystroke
+   path). On `Ready`, run an edit session to display the highlighted candidate;
+   Space/↓ cycle, number/Enter commit, Esc cancels — mirroring the engine's
+   candidate mode (and the macOS frontend).
+3. Optionally surface the list via `ITfCandidateListUIElement` (UI-less mode);
+   an inline highlighted-candidate display (like macOS) is the simpler first cut.
+
+`begin`/`poll` must run off the UI thread (a worker thread or the timer window),
+never inside `OnKeyDown`.
+
+## Scope
 
 - ✅ Romaji→kana via the shared engine, shown as a TSF composition; Enter/Space commit.
 - ✅ `ITfTextInputProcessorEx` + UI-less / immersive category registration (works in UWP/Store apps).
-- ⛔ Candidate-window UI (`ITfCandidateListUIElement`) — M2 (cloud-AI conversion).
+- ✅ IPC client for AI (`BeginAiConvert`/`PollAiResult`) matching `docs/ipc-protocol.md`.
+- ⛔ Async AI trigger + candidate rendering in the TIP (design above) — build on Windows.
 - ⛔ Auto-launch / restart of `ime-server.exe`, randomized pipe name, multi-client concurrency — M4/M5.
 - ⛔ Authenticode signing + installer — M5.
