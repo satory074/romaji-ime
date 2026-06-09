@@ -10,6 +10,12 @@
     "api_key": "sk-...",
     "model": "gpt-4o-mini"
   },
+  "_gemini_free_tier_example": {
+    "provider": "gemini",
+    "api_key": "AIza... (free key from https://aistudio.google.com/apikey)",
+    "model": "gemini-2.0-flash",
+    "_note": "Uses Google's OpenAI-compatible endpoint automatically. Free tier inputs may be used by Google to improve products — avoid for sensitive text."
+  },
   "_local_lmstudio_example": {
     "provider": "openai",
     "endpoint": "http://localhost:1234/v1",

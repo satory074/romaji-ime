@@ -215,13 +215,20 @@ mod http {
 
     impl HttpConverter {
         pub fn new(cfg: AiConfig) -> Self {
-            let provider = match cfg.provider.as_deref() {
-                Some("anthropic") => Provider::Anthropic,
-                _ => Provider::OpenAi,
-            };
-            let (default_endpoint, default_model) = match provider {
-                Provider::OpenAi => ("https://api.openai.com/v1", "gpt-4o-mini"),
-                Provider::Anthropic => ("https://api.anthropic.com", "claude-3-5-haiku-latest"),
+            // Gemini speaks an OpenAI-compatible endpoint, so it reuses the OpenAi
+            // wire shape with Google's base URL and a default Flash model.
+            let (provider, default_endpoint, default_model) = match cfg.provider.as_deref() {
+                Some("anthropic") => (
+                    Provider::Anthropic,
+                    "https://api.anthropic.com",
+                    "claude-3-5-haiku-latest",
+                ),
+                Some("gemini") => (
+                    Provider::OpenAi,
+                    "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "gemini-2.0-flash",
+                ),
+                _ => (Provider::OpenAi, "https://api.openai.com/v1", "gpt-4o-mini"),
             };
             HttpConverter {
                 provider,
