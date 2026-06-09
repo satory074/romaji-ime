@@ -1,0 +1,20 @@
+{
+  "_comment": "Cloud-AI conversion settings. Copy to the per-user data dir and fill in your key. NEVER commit a real key. macOS: ~/Library/Application Support/RomajiIME/config.json   Windows: next to ime-server.exe (per its data dir).",
+
+  "provider": "anthropic",
+  "api_key": "sk-ant-...",
+  "model": "claude-3-5-haiku-latest",
+
+  "_openai_example": {
+    "provider": "openai",
+    "api_key": "sk-...",
+    "model": "gpt-4o-mini"
+  },
+  "_local_lmstudio_example": {
+    "provider": "openai",
+    "endpoint": "http://localhost:1234/v1",
+    "model": "your-local-model"
+  },
+
+  "timeout_ms": 5000
+}

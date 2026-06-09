@@ -22,7 +22,22 @@ and ad-hoc signs the bundle.
 
 System Settings ▸ Keyboard ▸ Text Input ▸ Edit… ▸ **+** ▸ Japanese ▸ **RomajiIME**,
 then switch to it (Ctrl+Space / the input menu) and type e.g. `konnichiha` in
-TextEdit → **こんにちは**. Space/Enter commit the kana.
+TextEdit → **こんにちは**. Enter commits the kana.
+
+## Cloud-AI conversion (the headline feature)
+
+With AI configured, **Space** converts your (loose) romaji into Japanese
+candidates via an LLM: ↓/Space cycle, ↑ back, number keys or Enter commit, Esc
+cancels back to the kana. Without AI configured, Space just commits the kana.
+
+Configure by creating **`~/Library/Application Support/RomajiIME/config.json`**
+(see `docs/config.example.json`) with your provider + API key, then re-select the
+input source so the engine reloads. The engine reads it at startup. Keystrokes
+are never sent to the cloud in secure (password) fields, and the API key is
+never logged or committed.
+
+> The current candidate UI is **inline** (the highlighted candidate shows as the
+> composition; cycle with Space). A custom candidate-list window is a follow-up.
 
 ## Verifying without a GUI
 

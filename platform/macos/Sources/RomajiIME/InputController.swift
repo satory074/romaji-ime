@@ -1,3 +1,4 @@
+import Carbon  // IsSecureEventInputEnabled
 import Cocoa
 import InputMethodKit
 
@@ -9,6 +10,9 @@ import InputMethodKit
 @objc(InputController)
 final class InputController: IMKInputController {
     private var session: EngineSession?
+    /// True while a cloud-AI conversion is in flight (keys are swallowed so the
+    /// session is only touched on the main thread).
+    private var converting = false
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -37,8 +41,25 @@ final class InputController: IMKInputController {
         if session == nil { session = SharedEngine.shared.newSession() }
         guard let session = session else { return false }
 
+        // Swallow keys while a conversion is resolving (brief, ~1s).
+        if converting { return true }
+
         let (sym, mods) = Self.translate(event)
         if sym == 0 { return false }
+
+        // Space triggers cloud-AI conversion — the headline feature — when
+        // composing. begin returns 0 if AI is unavailable or we're already
+        // showing candidates, in which case we fall through to normal handling
+        // (which cycles candidates / commits local kana).
+        let isShortcut = mods & ((1 << 2) | (1 << 3)) != 0
+        if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
+            let (before, after) = Self.surroundingContext(client)
+            let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
+            if id != 0 {
+                startConverting(reqId: id, client: client)
+                return true
+            }
+        }
 
         let flags = session.processKey(sym: sym, mods: mods)
         // The C macros import as Int32; compare against the UInt32 flags.
@@ -46,14 +67,44 @@ final class InputController: IMKInputController {
             // Not ours: let the client handle it (e.g. literal space, arrows).
             return false
         }
-        if flags & UInt32(RIME_COMMIT) != 0 {
-            let commit = session.commitText()
-            if !commit.isEmpty {
-                client.insertText(commit, replacementRange: Self.noRange)
-            }
+        applyResult(session: session, client: client)
+        return true
+    }
+
+    /// Insert any committed text and refresh the marked (preedit) text.
+    private func applyResult(session: EngineSession, client: IMKTextInput) {
+        let commit = session.commitText()
+        if !commit.isEmpty {
+            client.insertText(commit, replacementRange: Self.noRange)
         }
         updateMarkedText(session.preedit(), client: client)
-        return true
+    }
+
+    /// Poll the in-flight conversion on the main thread until it resolves. Only
+    /// the HTTP call runs off-thread (inside the engine); the session is only
+    /// ever touched here on main.
+    private func startConverting(reqId: UInt64, client: IMKTextInput) {
+        converting = true
+        let start = Date()
+        func poll() {
+            guard converting, let session = session else { return }
+            switch session.pollAiResult(reqId) {
+            case 1:  // ready: candidates populated, preedit = top candidate
+                converting = false
+                updateMarkedText(session.preedit(), client: client)
+            case -1:  // error: stay composing, leave the local kana visible
+                converting = false
+                updateMarkedText(session.preedit(), client: client)
+            default:  // pending
+                if Date().timeIntervalSince(start) > 5.0 {
+                    converting = false
+                    updateMarkedText(session.preedit(), client: client)
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: poll)
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: poll)
     }
 
     // MARK: - Helpers
@@ -118,5 +169,30 @@ final class InputController: IMKInputController {
             }
         }
         return (0, mods)
+    }
+
+    /// Best-effort surrounding document text for AI context. Many apps don't
+    /// expose it, so this fails soft to ("", "").
+    static func surroundingContext(_ client: IMKTextInput) -> (String, String) {
+        let sel = client.selectedRange()
+        guard sel.location != NSNotFound else { return ("", "") }
+        var before = ""
+        let beforeLen = min(20, sel.location)
+        if beforeLen > 0,
+           let attr = client.attributedSubstring(
+               from: NSRange(location: sel.location - beforeLen, length: beforeLen)) {
+            before = attr.string
+        }
+        var after = ""
+        if let attr = client.attributedSubstring(from: NSRange(location: sel.location, length: 20)) {
+            after = attr.string
+        }
+        return (before, after)
+    }
+
+    /// True when macOS secure input is active (password fields, etc). We never
+    /// send keystrokes to a cloud LLM in that case.
+    static func isSecureInput() -> Bool {
+        IsSecureEventInputEnabled()
     }
 }

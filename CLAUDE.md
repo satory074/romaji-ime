@@ -88,15 +88,26 @@ cargo check -p ime-server --target i686-pc-windows-msvc
 - Rust toolchain pinned in `rust-toolchain.toml` (stable + 4 targets). LLM API
   keys must never be committed (see `.gitignore`).
 
+## Cloud-AI conversion (headline feature)
+
+Type loose romaji, press **Space**, an LLM returns ranked Japanese candidates
+(↓/Space cycle, number/Enter commit, Esc cancel). Engine: `ime-engine/ai.rs`
+(`Converter` trait + `HttpConverter` for OpenAI-compatible/Anthropic, feature
+`cloud-http`). The LLM call runs on a background thread; the session is polled on
+its own thread (begin/poll pull model) so the input thread never blocks.
+Configure via `{user_data_dir}/config.json` or `ROMAJI_IME_*` env (see
+`docs/config.example.json`). `native-tls` keeps it cross-compiling to Windows.
+Never sends keystrokes from secure (password) fields.
+
 ## Status
 
-**M1 complete (both platforms wired end-to-end for romaji→kana):**
-- Core: real incremental romaji→kana in `ime-engine` (`romaji.rs`); 33 workspace tests pass.
-- macOS: `RomajiIME.app` builds (universal), links the engine via the C ABI, launches its
-  IMKServer, installs to `~/Library/Input Methods/`. Build: `platform/macos/build.sh`.
-  (Enabling it + typing in TextEdit is a manual GUI step.)
-- Windows: `ime-server` (Rust) hosts the engine over a named pipe — verified to cross-compile
-  for x86_64/i686-pc-windows-msvc and host-tested via the dispatcher/transport unit tests.
-  The thin C++ TSF DLL (`platform/windows`) is written but builds on Windows/CI (not on macOS).
+- **Core (M1+M2):** romaji→kana + cloud-AI candidate machine in `ime-engine`; 41 workspace tests.
+- **macOS (M1+M2):** `RomajiIME.app` (universal) — romaji→kana inline, **Space = AI convert**
+  with inline candidate cycling, secure-field guard. Builds via `platform/macos/build.sh`,
+  installs to `~/Library/Input Methods/`. (Enable + type is a manual GUI step; a custom
+  candidate-list window is still pending.)
+- **Windows:** `ime-server` (Rust) hosts the engine + AI over a named pipe; cross-compiles for
+  x86_64/i686-pc-windows-msvc; dispatcher/transport unit-tested. The C++ TSF DLL does romaji→kana
+  (M1); its **candidate UI + Space-triggered AI are still to do (M2d)** and it builds on Windows/CI.
 
-Next: **M2 — cloud-AI conversion (the headline feature)** + candidate UI on both frontends.
+Next: Windows candidate UI (M2d); then M3 (local dictionary/Viterbi fallback), M4 (learning), M5 (signing/installers).

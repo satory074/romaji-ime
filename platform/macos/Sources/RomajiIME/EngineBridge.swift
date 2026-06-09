@@ -6,9 +6,22 @@ final class SharedEngine {
     private let engine: OpaquePointer?
 
     private init() {
-        // M1: no dictionary/config yet. M2+ will pass the bundle's resource dir
-        // and an Application Support dir for the learning DB / settings.
-        engine = rime_engine_new(nil, nil)
+        // Pass a per-user data dir so the engine can read cloud-AI settings from
+        // {dataDir}/config.json (env vars aren't available to a launchd-launched
+        // IME). The engine reads it synchronously here, so config.json must exist
+        // before first activation; add it then re-select the input source.
+        let fm = FileManager.default
+        let dataDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("RomajiIME")
+        if let dir = dataDir {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        if let path = dataDir?.path {
+            engine = path.withCString { rime_engine_new(nil, $0) }
+        } else {
+            engine = rime_engine_new(nil, nil)
+        }
         if engine == nil {
             NSLog("RomajiIME: rime_engine_new returned NULL")
         }
@@ -45,5 +58,29 @@ final class EngineSession {
 
     func reset() {
         rime_session_reset(ptr)
+    }
+
+    func candidateCount() -> Int {
+        rime_get_candidate_count(ptr)
+    }
+
+    func candidate(_ index: Int) -> String {
+        guard let p = rime_get_candidate_text(ptr, index) else { return "" }
+        return String(cString: p)
+    }
+
+    func highlighted() -> Int {
+        rime_get_highlighted_index(ptr)
+    }
+
+    /// Start an async cloud-AI conversion; returns a request id, or 0 if
+    /// unavailable (no converter, nothing composing, or candidates already shown).
+    func beginAiConvert(contextBefore: String, contextAfter: String) -> UInt64 {
+        rime_begin_ai_convert(ptr, contextBefore, contextAfter)
+    }
+
+    /// Poll: 0 = pending, 1 = ready (preedit/candidates updated), -1 = error.
+    func pollAiResult(_ reqId: UInt64) -> Int32 {
+        rime_poll_ai_result(ptr, reqId)
     }
 }
