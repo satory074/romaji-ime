@@ -24,8 +24,14 @@ const PIPE_NAME: &str = r"\\.\pipe\romaji_ime";
 
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
-    // Cloud-AI converter from config.json / env (the headline feature).
-    let engine = Engine::new(None, None).with_ai_from_config();
+    // Read cloud-AI settings from %LOCALAPPDATA%\RomajiIME\config.json (matching
+    // macOS), falling back to ROMAJI_IME_* env vars.
+    let data_dir =
+        std::env::var_os("LOCALAPPDATA").map(|p| std::path::PathBuf::from(p).join("RomajiIME"));
+    if let Some(dir) = &data_dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let engine = Engine::new(None, data_dir).with_ai_from_config();
     let mut dispatcher = Dispatcher::new(engine);
     eprintln!("ime-server listening on {PIPE_NAME}");
     pipe_win::run(PIPE_NAME, &mut dispatcher)
