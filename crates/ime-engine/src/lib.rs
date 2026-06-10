@@ -17,6 +17,7 @@
 
 pub mod ai;
 pub mod key;
+pub mod learning;
 pub mod romaji;
 mod session;
 
@@ -24,8 +25,9 @@ pub use ai::{AiPoll, ConvertRequest, Converter};
 pub use key::{flags, keysym, modifiers, Key};
 pub use session::Session;
 
+use learning::Learning;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Process-global engine state.
 ///
@@ -44,6 +46,8 @@ pub struct Engine {
     /// Auto-convert behaviour (read from config; defaults on/500ms).
     ac_enabled: bool,
     ac_delay_ms: u32,
+    /// Usage learning, shared across sessions and persisted under user_data_dir.
+    learning: Arc<Mutex<Learning>>,
 }
 
 impl Default for Engine {
@@ -54,6 +58,7 @@ impl Default for Engine {
             converter: None,
             ac_enabled: true,
             ac_delay_ms: 500,
+            learning: Arc::new(Mutex::new(Learning::default())),
         }
     }
 }
@@ -88,6 +93,8 @@ impl Engine {
         let settings = ai::settings_from_config(self.user_data_dir.as_deref());
         self.ac_enabled = settings.auto_convert;
         self.ac_delay_ms = settings.auto_convert_delay_ms as u32;
+        let learning_path = self.user_data_dir.as_ref().map(|d| d.join("learning.json"));
+        self.learning = Arc::new(Mutex::new(Learning::load(learning_path)));
         self
     }
 
@@ -108,6 +115,6 @@ impl Engine {
 
     /// Start a new input session (one per focused text field / IMK controller).
     pub fn new_session(&self) -> Session {
-        Session::new(self.converter.clone())
+        Session::new(self.converter.clone(), self.learning.clone())
     }
 }

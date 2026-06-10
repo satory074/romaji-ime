@@ -14,6 +14,7 @@
 
 use crate::ai::{AiPoll, ConvertRequest, Converter};
 use crate::key::{flags, keysym, Key};
+use crate::learning::Learning;
 use crate::romaji;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -48,10 +49,15 @@ pub struct Session {
     slots: HashMap<u64, Arc<Mutex<Slot>>>,
     /// Message from the most recent failed AI conversion (for diagnostics).
     last_error: String,
+    /// Shared usage learning (promotes previously-chosen candidates).
+    learning: Arc<Mutex<Learning>>,
 }
 
 impl Session {
-    pub(crate) fn new(converter: Option<Arc<dyn Converter>>) -> Self {
+    pub(crate) fn new(
+        converter: Option<Arc<dyn Converter>>,
+        learning: Arc<Mutex<Learning>>,
+    ) -> Self {
         Session {
             raw: String::new(),
             preedit: String::new(),
@@ -63,6 +69,7 @@ impl Session {
             next_req: 1,
             slots: HashMap::new(),
             last_error: String::new(),
+            learning,
         }
     }
 
@@ -145,6 +152,10 @@ impl Session {
 
     fn commit_candidate(&mut self, index: usize) -> u32 {
         if let Some(text) = self.candidates.get(index).cloned() {
+            // Learn this choice for the current reading so it ranks first later.
+            if let Ok(mut learning) = self.learning.lock() {
+                learning.record(&self.raw, &text);
+            }
             self.commit = text;
             self.clear_all();
             flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES | flags::COMMIT
@@ -353,6 +364,10 @@ impl Session {
         // romaji (as-typed and uppercased) appended at the bottom as a guaranteed
         // "exactly what I typed" choice.
         self.candidates = Self::with_romaji_fallbacks(cands, &self.raw);
+        // Promote previously-chosen candidates for this reading to the top.
+        if let Ok(learning) = self.learning.lock() {
+            learning.reorder(&self.raw, &mut self.candidates);
+        }
         if self.highlighted >= self.candidates.len() {
             self.highlighted = 0;
         }
@@ -373,8 +388,12 @@ mod tests {
     use crate::ai::AiError;
     use crate::key::{keysym, Key};
 
+    fn fresh_learning() -> Arc<Mutex<Learning>> {
+        Arc::new(Mutex::new(Learning::load(None))) // in-memory, no persistence
+    }
+
     fn no_ai() -> Session {
-        Session::new(None)
+        Session::new(None, fresh_learning())
     }
 
     fn type_str(s: &mut Session, text: &str) {
@@ -436,9 +455,12 @@ mod tests {
     }
 
     fn with_mock(candidates: &[&str]) -> Session {
-        Session::new(Some(Arc::new(MockConverter {
-            candidates: candidates.iter().map(|s| s.to_string()).collect(),
-        })))
+        Session::new(
+            Some(Arc::new(MockConverter {
+                candidates: candidates.iter().map(|s| s.to_string()).collect(),
+            })),
+            fresh_learning(),
+        )
     }
 
     /// Poll until the background conversion resolves (bounded).
@@ -466,6 +488,26 @@ mod tests {
             &["日本語", "にほんご", "二本後", "nihongo", "NIHONGO"]
         );
         assert_eq!(s.preedit(), "日本語"); // highlighted candidate shown inline
+    }
+
+    #[test]
+    fn learning_promotes_previously_selected() {
+        let mut s = with_mock(&["日本語", "にほんご", "二本後"]);
+        type_str(&mut s, "nihongo");
+        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        poll_until_done(&mut s, id);
+        assert_eq!(s.candidates()[0], "日本語"); // default order first time
+
+        s.process_key(Key::new(keysym::SPACE, 0)); // highlight 1 -> にほんご
+        let f = s.process_key(Key::new(keysym::RETURN, 0)); // commit にほんご (learned)
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "にほんご");
+
+        // Same reading again -> the learned candidate is now first.
+        type_str(&mut s, "nihongo");
+        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        poll_until_done(&mut s, id);
+        assert_eq!(s.candidates()[0], "にほんご");
     }
 
     #[test]
@@ -529,7 +571,7 @@ mod tests {
 
     #[test]
     fn ai_failure_is_reported() {
-        let mut s = Session::new(Some(Arc::new(FailingConverter)));
+        let mut s = Session::new(Some(Arc::new(FailingConverter)), fresh_learning());
         type_str(&mut s, "ka");
         let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
         assert!(matches!(poll_until_done(&mut s, id), AiPoll::Error(_)));
