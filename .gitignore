@@ -28,3 +28,6 @@ DerivedData/
 .env
 *.local.toml
 secrets.toml
+# Real cloud-AI config (only the *.example.json is tracked)
+config.json
+**/config.json
