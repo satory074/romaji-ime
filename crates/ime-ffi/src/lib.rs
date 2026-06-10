@@ -117,6 +117,15 @@ pub extern "C" fn rime_engine_free(engine: *mut RimeEngine) {
     }
 }
 
+/// Whether a cloud-AI converter is configured (config.json / env loaded). Useful
+/// for diagnostics and for deciding whether to offer AI conversion.
+#[no_mangle]
+pub extern "C" fn rime_engine_has_ai(engine: *const RimeEngine) -> bool {
+    unsafe { engine.as_ref() }
+        .map(|e| e.inner.has_ai())
+        .unwrap_or(false)
+}
+
 /// Start a new input session. Returns NULL if `engine` is NULL. Free with
 /// [`rime_session_free`]. The engine must outlive all its sessions.
 #[no_mangle]

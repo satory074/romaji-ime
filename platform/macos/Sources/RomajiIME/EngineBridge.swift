@@ -22,7 +22,10 @@ final class SharedEngine {
         } else {
             engine = rime_engine_new(nil, nil)
         }
-        if engine == nil {
+        if let e = engine {
+            NSLog("RomajiIME: engine ready, cloud-AI configured = %@",
+                  rime_engine_has_ai(e) ? "YES" : "NO (Space will commit kana)")
+        } else {
             NSLog("RomajiIME: rime_engine_new returned NULL")
         }
     }

@@ -55,6 +55,7 @@ final class InputController: IMKInputController {
         if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
             let (before, after) = Self.surroundingContext(client)
             let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
+            NSLog("RomajiIME: Space -> beginAiConvert id=%llu", id)
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
@@ -91,9 +92,11 @@ final class InputController: IMKInputController {
             switch session.pollAiResult(reqId) {
             case 1:  // ready: candidates populated, preedit = top candidate
                 converting = false
+                NSLog("RomajiIME: AI ready -> %@", session.preedit())
                 updateMarkedText(session.preedit(), client: client)
             case -1:  // error: stay composing, leave the local kana visible
                 converting = false
+                NSLog("RomajiIME: AI error/unavailable -> falling back to kana")
                 updateMarkedText(session.preedit(), client: client)
             default:  // pending
                 if Date().timeIntervalSince(start) > 5.0 {

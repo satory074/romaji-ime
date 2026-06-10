@@ -22,5 +22,9 @@ _ = server
 NSLog("RomajiIME: IMKServer started (connection=%@, engine ABI=%u)",
       connectionName, rime_abi_version())
 
+// Force engine init at startup so the cloud-AI config status is logged eagerly
+// (and the first conversion is a touch faster).
+_ = SharedEngine.shared
+
 let app = NSApplication.shared
 app.run()

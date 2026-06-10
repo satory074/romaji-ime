@@ -60,6 +60,12 @@ struct RimeEngine *rime_engine_new(const char *config_dir, const char *user_data
 void rime_engine_free(struct RimeEngine *engine);
 
 /*
+ Whether a cloud-AI converter is configured (config.json / env loaded). Useful
+ for diagnostics and for deciding whether to offer AI conversion.
+ */
+bool rime_engine_has_ai(const struct RimeEngine *engine);
+
+/*
  Start a new input session. Returns NULL if `engine` is NULL. Free with
  [`rime_session_free`]. The engine must outlive all its sessions.
  */
