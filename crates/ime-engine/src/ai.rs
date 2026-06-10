@@ -68,7 +68,7 @@ pub fn system_prompt() -> &'static str {
      identifiers, and URLs in the Latin alphabet with correct casing \
      (e.g. 'github'->'GitHub', 'ok'->'OK', 'api'->'API'). Tolerate typos, \
      missing vowels, and abbreviations. Use the surrounding context if given. \
-     Respond with ONLY a JSON array of up to 5 candidate strings, best first, \
+     Respond with ONLY a JSON array of up to 4 candidate strings, best first, \
      and nothing else. Each candidate is the conversion of the marked input \
      only (do not include the surrounding context)."
 }
@@ -202,6 +202,9 @@ fn build_http_converter(_cfg: AiConfig) -> Option<Arc<dyn Converter>> {
 #[cfg(feature = "cloud-http")]
 mod http {
     use super::*;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     #[derive(Clone, Copy, PartialEq)]
     enum Provider {
@@ -209,12 +212,59 @@ mod http {
         Anthropic,
     }
 
+    /// Small thread-safe FIFO cache so repeated input (re-typing, corrections)
+    /// returns instantly without a network round trip.
+    struct FifoCache {
+        map: HashMap<String, Vec<String>>,
+        order: VecDeque<String>,
+        cap: usize,
+    }
+
+    impl FifoCache {
+        fn new(cap: usize) -> Self {
+            FifoCache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+                cap,
+            }
+        }
+        fn get(&self, key: &str) -> Option<Vec<String>> {
+            self.map.get(key).cloned()
+        }
+        fn put(&mut self, key: String, value: Vec<String>) {
+            if self.map.contains_key(&key) {
+                return;
+            }
+            if self.order.len() >= self.cap {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+            self.order.push_back(key.clone());
+            self.map.insert(key, value);
+        }
+    }
+
+    /// Build the ureq agent ONCE and reuse it so the TLS connection is kept alive
+    /// across conversions (a fresh agent per call meant a TLS handshake every
+    /// time). ureq with only the native-tls feature needs an explicit connector.
+    fn build_agent(timeout_ms: u64) -> ureq::Agent {
+        let builder = ureq::AgentBuilder::new().timeout(Duration::from_millis(timeout_ms));
+        match native_tls::TlsConnector::new() {
+            Ok(connector) => builder
+                .tls_connector(std::sync::Arc::new(connector))
+                .build(),
+            Err(_) => builder.build(),
+        }
+    }
+
     pub struct HttpConverter {
         provider: Provider,
-        endpoint: String,
+        url: String,
         api_key: String,
         model: String,
-        timeout_ms: u64,
+        agent: ureq::Agent,
+        cache: Mutex<FifoCache>,
     }
 
     impl HttpConverter {
@@ -234,24 +284,27 @@ mod http {
                 ),
                 _ => (Provider::OpenAi, "https://api.openai.com/v1", "gpt-4o-mini"),
             };
+            let endpoint = cfg.endpoint.unwrap_or_else(|| default_endpoint.to_string());
+            let base = endpoint.trim_end_matches('/');
+            let url = match provider {
+                Provider::OpenAi => format!("{base}/chat/completions"),
+                Provider::Anthropic => format!("{base}/v1/messages"),
+            };
             HttpConverter {
                 provider,
-                endpoint: cfg.endpoint.unwrap_or_else(|| default_endpoint.to_string()),
+                url,
                 api_key: cfg.api_key.unwrap_or_default(),
                 model: cfg.model.unwrap_or_else(|| default_model.to_string()),
-                timeout_ms: cfg.timeout_ms.unwrap_or(5000),
+                agent: build_agent(cfg.timeout_ms.unwrap_or(5000)),
+                cache: Mutex::new(FifoCache::new(256)),
             }
         }
 
-        fn url(&self) -> String {
-            match self.provider {
-                Provider::OpenAi => {
-                    format!("{}/chat/completions", self.endpoint.trim_end_matches('/'))
-                }
-                Provider::Anthropic => {
-                    format!("{}/v1/messages", self.endpoint.trim_end_matches('/'))
-                }
-            }
+        fn cache_key(req: &ConvertRequest) -> String {
+            format!(
+                "{}\u{1}{}\u{1}{}",
+                req.romaji, req.context_before, req.context_after
+            )
         }
 
         fn body(&self, req: &ConvertRequest) -> serde_json::Value {
@@ -261,6 +314,7 @@ mod http {
                 Provider::OpenAi => serde_json::json!({
                     "model": self.model,
                     "temperature": 0.3,
+                    "max_tokens": 128,   // small output -> faster (a few short candidates)
                     "messages": [
                         {"role": "system", "content": sys},
                         {"role": "user", "content": user},
@@ -268,7 +322,7 @@ mod http {
                 }),
                 Provider::Anthropic => serde_json::json!({
                     "model": self.model,
-                    "max_tokens": 256,
+                    "max_tokens": 128,
                     "system": sys,
                     "messages": [{"role": "user", "content": user}],
                 }),
@@ -296,20 +350,21 @@ mod http {
 
     impl Converter for HttpConverter {
         fn convert(&self, req: &ConvertRequest) -> Result<Vec<String>, AiError> {
-            if self.api_key.is_empty() && self.endpoint.starts_with("https://api.") {
+            if self.api_key.is_empty() && self.url.starts_with("https://") {
                 return Err(AiError::Config("missing API key".into()));
             }
-            // ureq with only the native-tls feature needs an explicit connector;
-            // without it HTTPS fails immediately ("no TLS").
-            let connector = native_tls::TlsConnector::new()
-                .map_err(|e| AiError::Network(format!("TLS init: {e}")))?;
-            let agent = ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_millis(self.timeout_ms))
-                .tls_connector(std::sync::Arc::new(connector))
-                .build();
+            // Cache hit -> instant, no network.
+            let key = Self::cache_key(req);
+            if let Ok(cache) = self.cache.lock() {
+                if let Some(hit) = cache.get(&key) {
+                    return Ok(hit);
+                }
+            }
 
-            let mut request = agent
-                .post(&self.url())
+            // Reuse the persistent agent (keep-alive connection).
+            let mut request = self
+                .agent
+                .post(&self.url)
                 .set("content-type", "application/json");
             request = match self.provider {
                 Provider::OpenAi => {
@@ -332,7 +387,29 @@ mod http {
             let content = self
                 .extract_text(&json)
                 .ok_or_else(|| AiError::Parse("unexpected response shape".into()))?;
-            Ok(parse_candidates(&content))
+            let candidates = parse_candidates(&content);
+            if !candidates.is_empty() {
+                if let Ok(mut cache) = self.cache.lock() {
+                    cache.put(key, candidates.clone());
+                }
+            }
+            Ok(candidates)
+        }
+    }
+
+    #[cfg(test)]
+    mod cache_tests {
+        use super::*;
+
+        #[test]
+        fn fifo_cache_evicts_oldest() {
+            let mut c = FifoCache::new(2);
+            c.put("a".into(), vec!["1".into()]);
+            c.put("b".into(), vec!["2".into()]);
+            c.put("c".into(), vec!["3".into()]); // evicts "a"
+            assert!(c.get("a").is_none());
+            assert_eq!(c.get("b"), Some(vec!["2".to_string()]));
+            assert_eq!(c.get("c"), Some(vec!["3".to_string()]));
         }
     }
 }
