@@ -99,6 +99,11 @@ impl Session {
                 .get(self.highlighted)
                 .cloned()
                 .unwrap_or_default(),
+            // AI mode (no mode switching): show the raw romaji the user typed so
+            // English/identifiers look natural; the AI converts the whole buffer
+            // (JP + English) on a pause or on Space/Enter. Offline (no converter),
+            // fall back to showing the romaji->kana transliteration.
+            Mode::Composing if self.converter.is_some() => self.raw.clone(),
             Mode::Composing => {
                 let (kana, pending) = romaji::convert(&self.raw);
                 if pending == "n" {
@@ -122,6 +127,7 @@ impl Session {
         self.candidates.clear();
         self.highlighted = 0;
         self.mode = Mode::Composing;
+        self.slots.clear(); // drop any abandoned in-flight AI requests
         self.refresh_preedit();
     }
 
@@ -453,8 +459,8 @@ mod tests {
         let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
         poll_until_done(&mut s, id);
         s.process_key(Key::new(keysym::ESCAPE, 0));
-        // Back to composing: the romaji is preserved and shown as kana again.
-        assert_eq!(s.preedit(), "にほんご");
+        // Back to composing: the romaji is preserved (AI mode shows raw romaji).
+        assert_eq!(s.preedit(), "nihongo");
         // And a second conversion can be started.
         assert!(s.begin_ai_convert(String::new(), String::new()).is_some());
     }
@@ -475,8 +481,8 @@ mod tests {
         type_str(&mut s, "ka");
         let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
         assert!(matches!(poll_until_done(&mut s, id), AiPoll::Error(_)));
-        // Still composing, so the frontend can fall back to local kana.
-        assert_eq!(s.preedit(), "か");
+        // Still composing (AI mode shows raw romaji); frontend can retry/fallback.
+        assert_eq!(s.preedit(), "ka");
     }
 
     #[test]
@@ -490,6 +496,18 @@ mod tests {
         assert!(f & flags::COMMIT != 0);
         assert_eq!(s.commit_text(), "日本語");
         s.process_key(Key::new('a' as u32, 0));
-        assert_eq!(s.preedit(), "か");
+        assert_eq!(s.preedit(), "ka"); // AI mode shows raw romaji
+    }
+
+    #[test]
+    fn ai_mode_shows_raw_romaji_offline_shows_kana() {
+        // With a converter, composing shows the raw romaji (English-friendly).
+        let mut ai = with_mock(&["x"]);
+        type_str(&mut ai, "github");
+        assert_eq!(ai.preedit(), "github");
+        // Without a converter, composing shows kana.
+        let mut off = no_ai();
+        type_str(&mut off, "nihongo");
+        assert_eq!(off.preedit(), "にほんご");
     }
 }

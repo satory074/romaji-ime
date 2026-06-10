@@ -61,12 +61,16 @@ pub enum AiPoll {
 
 /// The system instruction shared by all providers.
 pub fn system_prompt() -> &'static str {
-    "You are a Japanese romaji input method (IME). Convert the user's possibly \
-     rough/loose romaji into natural Japanese (kanji-kana mixed). Tolerate typos, \
+    "You are a Japanese romaji input method (IME) with no mode switching: the \
+     user types everything as loose Latin text — romaji for Japanese, and plain \
+     Latin for English words, names, code identifiers, and URLs mixed in. \
+     Convert it into natural Japanese, but KEEP intended English/Latin words, \
+     identifiers, and URLs in the Latin alphabet with correct casing \
+     (e.g. 'github'->'GitHub', 'ok'->'OK', 'api'->'API'). Tolerate typos, \
      missing vowels, and abbreviations. Use the surrounding context if given. \
      Respond with ONLY a JSON array of up to 5 candidate strings, best first, \
-     and nothing else. Each candidate is the converted Japanese for the marked \
-     input only (do not include the surrounding context)."
+     and nothing else. Each candidate is the conversion of the marked input \
+     only (do not include the surrounding context)."
 }
 
 /// Build the user message. The text to convert is wrapped in 《》 between the

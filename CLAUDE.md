@@ -90,8 +90,12 @@ cargo check -p ime-server --target i686-pc-windows-msvc
 
 ## Cloud-AI conversion (headline feature)
 
-Type loose romaji, press **Space**, an LLM returns ranked Japanese candidates
-(↓/Space cycle, number/Enter commit, Esc cancel). Engine: `ime-engine/ai.rs`
+**No mode switching** — the whole point. The composing preedit shows the **raw
+romaji** (English-friendly); the AI auto-converts ~0.5s after you stop typing
+(Space/Enter convert immediately), keeping intended English/Latin (`github`→
+`GitHub`) while converting the Japanese. Candidates: ↓/Space cycle, number/Enter
+commit, Esc cancel. Offline (no converter) falls back to romaji→kana inline.
+Engine: `ime-engine/ai.rs`
 (`Converter` trait + `HttpConverter` for OpenAI-compatible/Anthropic, feature
 `cloud-http`). The LLM call runs on a background thread; the session is polled on
 its own thread (begin/poll pull model) so the input thread never blocks.

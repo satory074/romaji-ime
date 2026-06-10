@@ -24,20 +24,31 @@ System Settings ▸ Keyboard ▸ Text Input ▸ Edit… ▸ **+** ▸ Japanese �
 then switch to it (Ctrl+Space / the input menu) and type e.g. `konnichiha` in
 TextEdit → **こんにちは**. Enter commits the kana.
 
-## Cloud-AI conversion (the headline feature)
+## Cloud-AI conversion (the headline feature) — no mode switching
 
-With AI configured, **Space** converts your (loose) romaji into Japanese
-candidates via an LLM: ↓/Space cycle, ↑ back, number keys or Enter commit, Esc
-cancels back to the kana. Without AI configured, Space just commits the kana.
+You just type loose romaji; the AI does the rest. **There is no kana/English
+mode to toggle.**
+
+- While composing, the **raw romaji is shown** (so English/identifiers look
+  natural). Type Japanese romaji and English freely in one go.
+- **Auto-convert:** ~0.5 s after you stop typing, the AI converts the whole
+  composition. You can also press **Space** or **Enter** to convert immediately.
+- The AI keeps intended English/Latin (e.g. `github`→`GitHub`, `ok`→`OK`) while
+  converting the Japanese (e.g. `nihongo wo github de kanri` → `日本語をGitHubで管理`).
+- In the candidate list: **Space/↓** cycle, **↑** back, **number keys / Enter**
+  commit, **Esc** cancels back to the romaji.
 
 Configure by creating **`~/Library/Application Support/RomajiIME/config.json`**
 (see `docs/config.example.json`) with your provider + API key, then re-select the
-input source so the engine reloads. The engine reads it at startup. Keystrokes
-are never sent to the cloud in secure (password) fields, and the API key is
-never logged or committed.
+input source so the engine reloads. Keystrokes are never sent to the cloud in
+secure (password) fields, and the API key is never logged or committed. Without
+AI configured, it falls back to plain romaji→kana (kana shown inline, Enter
+commits).
 
-> The current candidate UI is **inline** (the highlighted candidate shows as the
-> composition; cycle with Space). A custom candidate-list window is a follow-up.
+> The candidate UI is currently **inline** (the highlighted candidate shows as
+> the composition; cycle with Space). A custom candidate-list window is a
+> follow-up. Auto-convert calls the API on each typing pause — see the cost note
+> in the main README / `docs/config.example.json`.
 
 ## Verifying without a GUI
 

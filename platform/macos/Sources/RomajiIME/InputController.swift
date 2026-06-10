@@ -10,9 +10,13 @@ import InputMethodKit
 @objc(InputController)
 final class InputController: IMKInputController {
     private var session: EngineSession?
-    /// True while a cloud-AI conversion is in flight (keys are swallowed so the
-    /// session is only touched on the main thread).
+    /// True while a cloud-AI conversion is in flight. A new keystroke cancels it
+    /// (the session is only ever touched on the main thread).
     private var converting = false
+    /// Monotonic token; bumped on every key to cancel a pending auto-convert.
+    private var autoConvertToken = 0
+    /// Idle delay before auto-converting once typing stops.
+    private let autoConvertDelayMs = 500
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -42,23 +46,24 @@ final class InputController: IMKInputController {
         if session == nil { session = SharedEngine.shared.newSession() }
         guard let session = session else { return false }
 
-        // Swallow keys while a conversion is resolving (brief, ~1s).
-        if converting { return true }
+        // A new keystroke cancels a pending auto-convert and any in-flight
+        // conversion, so typing is never blocked.
+        autoConvertToken &+= 1
+        converting = false
 
         let (sym, mods) = Self.translate(event)
         DebugLog.log("handle keyCode=\(event.keyCode) -> sym=0x\(String(sym, radix: 16)) mods=\(mods)")
         if sym == 0 { return false }
 
-        // Space triggers cloud-AI conversion — the headline feature — when
-        // composing. begin returns 0 if AI is unavailable or we're already
-        // showing candidates, in which case we fall through to normal handling
-        // (which cycles candidates / commits local kana).
+        // Space / Enter trigger immediate AI conversion while composing. There is
+        // no mode switching — the AI converts Japanese + English together. begin
+        // returns 0 when AI is unavailable or candidates are already shown, so we
+        // fall through to normal handling (cycle candidates / commit).
         let isShortcut = mods & ((1 << 2) | (1 << 3)) != 0
-        if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
+        if (sym == 0x20 || sym == 0xFF0D) && !isShortcut && !Self.isSecureInput() {
             let (before, after) = Self.surroundingContext(client)
             let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
-            NSLog("RomajiIME: Space -> beginAiConvert id=%llu", id)
-            DebugLog.log("Space -> beginAiConvert id=\(id) (secureInput=\(Self.isSecureInput()))")
+            DebugLog.log("convert-key sym=0x\(String(sym, radix: 16)) -> beginAiConvert id=\(id)")
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
@@ -73,7 +78,27 @@ final class InputController: IMKInputController {
             return false
         }
         applyResult(session: session, client: client)
+
+        // Auto-convert: after a brief pause once typing stops (no Space needed).
+        if !Self.isSecureInput() {
+            scheduleAutoConvert(client: client)
+        }
         return true
+    }
+
+    /// After `autoConvertDelayMs` of no further keys, convert the current
+    /// composition automatically. Cancelled if another key arrives (token check)
+    /// or if AI is unavailable / nothing is composing (begin returns 0).
+    private func scheduleAutoConvert(client: IMKTextInput) {
+        let token = autoConvertToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(autoConvertDelayMs)) { [weak self] in
+            guard let self = self, token == self.autoConvertToken, !self.converting else { return }
+            guard let session = self.session, !session.preedit().isEmpty else { return }
+            let (before, after) = Self.surroundingContext(client)
+            let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
+            DebugLog.log("auto-convert -> beginAiConvert id=\(id)")
+            if id != 0 { self.startConverting(reqId: id, client: client) }
+        }
     }
 
     /// Insert any committed text and refresh the marked (preedit) text.
