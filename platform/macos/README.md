@@ -45,10 +45,11 @@ secure (password) fields, and the API key is never logged or committed. Without
 AI configured, it falls back to plain romaji→kana (kana shown inline, Enter
 commits).
 
-> The candidate UI is currently **inline** (the highlighted candidate shows as
-> the composition; cycle with Space). A custom candidate-list window is a
-> follow-up. Auto-convert calls the API on each typing pause — see the cost note
-> in the main README / `docs/config.example.json`.
+Candidates appear in a **custom list window** below the caret
+(`CandidateWindow.swift`, a non-activating `NSPanel` — not `IMKCandidates`); the
+highlighted candidate is also shown inline as the marked text. Auto-convert calls
+the API on each typing pause — see the cost note in the main README /
+`docs/config.example.json`.
 
 ## Verifying without a GUI
 

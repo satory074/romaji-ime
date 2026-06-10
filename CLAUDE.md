@@ -144,13 +144,15 @@ or `ROMAJI_IME_*` env vars; see `docs/config.example.json`. `Engine::new` is pur
 
 - **Core + macOS (M0–M2): verified working on-device.** Type loose romaji → AI
   converts (incl. mixed English, e.g. `nihongo wo github de kanri` → `日本語を
-  GitHubで管理`); auto-convert on pause; Space/Enter convert immediately; inline
-  candidate cycling. Builds via `platform/macos/build.sh`.
+  GitHubで管理`); auto-convert on pause; Space/Enter convert immediately;
+  candidate-list window below the caret (`CandidateWindow.swift`, custom NSPanel —
+  not IMKCandidates) with Space/↓ cycle, number/Enter commit, Esc cancel. Builds
+  via `platform/macos/build.sh`.
 - **Windows:** `ime-server` (Rust) hosts the engine + AI over a named pipe;
   cross-compiles for x86_64/i686-pc-windows-msvc; dispatcher/transport
   unit-tested. The C++ TSF DLL does romaji→kana (M1) and has the IPC client incl.
   AI calls; its **async AI trigger + candidate UI must still be built/iterated on
   Windows** (design in `platform/windows/README.md`).
 
-Pending: macOS custom candidate-list window; Windows AI trigger/candidate UI;
-M3 (local dictionary/Viterbi fallback); M4 (learning); M5 (signing/installers).
+Pending: Windows AI trigger/candidate UI; M3 (local dictionary/Viterbi fallback);
+M4 (learning); M5 (signing/installers/notarization).

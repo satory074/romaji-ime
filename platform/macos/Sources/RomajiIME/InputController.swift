@@ -30,6 +30,7 @@ final class InputController: IMKInputController {
         if let client = sender as? IMKTextInput {
             commitCurrent(to: client)
         }
+        CandidateWindow.shared.hide()
         super.deactivateServer(sender)
     }
 
@@ -107,7 +108,31 @@ final class InputController: IMKInputController {
         if !commit.isEmpty {
             client.insertText(commit, replacementRange: Self.noRange)
         }
+        render(session, client: client)
+    }
+
+    /// Reflect the session state: update the inline marked text AND the candidate
+    /// list window (shown below the caret, hidden when there are no candidates).
+    private func render(_ session: EngineSession, client: IMKTextInput) {
         updateMarkedText(session.preedit(), client: client)
+        let count = session.candidateCount()
+        if count > 0 {
+            var list: [String] = []
+            list.reserveCapacity(count)
+            for i in 0..<count { list.append(session.candidate(i)) }
+            CandidateWindow.shared.show(
+                candidates: list, highlighted: session.highlighted(), caret: caretRect(client))
+        } else {
+            CandidateWindow.shared.hide()
+        }
+    }
+
+    /// The caret rectangle in screen coordinates (for positioning the candidate
+    /// window). Apps that don't report it yield .zero, handled by the window.
+    private func caretRect(_ client: IMKTextInput) -> NSRect {
+        var rect = NSRect.zero
+        _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        return rect
     }
 
     /// Poll the in-flight conversion on the main thread until it resolves. Only
@@ -123,16 +148,16 @@ final class InputController: IMKInputController {
                 converting = false
                 NSLog("RomajiIME: AI ready -> %@", session.preedit())
                 DebugLog.log("AI ready -> '\(session.preedit())' (\(session.candidateCount()) candidates)")
-                updateMarkedText(session.preedit(), client: client)
+                render(session, client: client)
             case -1:  // error: stay composing, leave the local kana visible
                 converting = false
                 NSLog("RomajiIME: AI error/unavailable -> falling back to kana")
                 DebugLog.log("AI error -> fallback. detail: \(session.lastError())")
-                updateMarkedText(session.preedit(), client: client)
+                render(session, client: client)
             default:  // pending
                 if Date().timeIntervalSince(start) > 5.0 {
                     converting = false
-                    updateMarkedText(session.preedit(), client: client)
+                    render(session, client: client)
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: poll)
                 }
@@ -150,7 +175,7 @@ final class InputController: IMKInputController {
             client.insertText(preedit, replacementRange: Self.noRange)
         }
         session.reset()
-        updateMarkedText("", client: client)
+        render(session, client: client)  // empty -> clears marked text + hides candidates
     }
 
     private func updateMarkedText(_ text: String, client: IMKTextInput) {
