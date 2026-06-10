@@ -131,8 +131,11 @@ impl Session {
         self.refresh_preedit();
     }
 
-    fn commit_kana(&mut self) -> u32 {
-        self.commit = romaji::flush(&self.raw);
+    /// Commit the current composition exactly as displayed (raw romaji in AI
+    /// mode, kana offline) — no AI conversion. Used by Enter, and by Space when
+    /// AI is unavailable.
+    fn commit_composition(&mut self) -> u32 {
+        self.commit = self.preedit.clone();
         self.clear_all();
         flags::CONSUMED | flags::PREEDIT | flags::COMMIT
     }
@@ -159,13 +162,13 @@ impl Session {
 
     fn process_key_composing(&mut self, key: Key) -> u32 {
         if key.sym == keysym::SPACE {
-            // Local fallback: commit kana. (The frontend prefers AI conversion by
-            // calling begin_ai_convert first; it only reaches here when AI is
-            // unavailable.)
+            // Local fallback: commit as displayed. (The frontend prefers AI
+            // conversion by calling begin_ai_convert on Space first; this is only
+            // reached when AI is unavailable.)
             return if self.raw.is_empty() {
                 0
             } else {
-                self.commit_kana()
+                self.commit_composition()
             };
         }
         if let Some(c) = key.printable_char() {
@@ -186,7 +189,7 @@ impl Session {
                 if self.raw.is_empty() {
                     0
                 } else {
-                    self.commit_kana()
+                    self.commit_composition()
                 }
             }
             keysym::ESCAPE => {
@@ -497,6 +500,18 @@ mod tests {
         assert_eq!(s.commit_text(), "日本語");
         s.process_key(Key::new('a' as u32, 0));
         assert_eq!(s.preedit(), "ka"); // AI mode shows raw romaji
+    }
+
+    #[test]
+    fn enter_commits_raw_romaji_in_ai_mode_no_conversion() {
+        // In AI mode, Enter commits exactly what's shown (raw romaji), without
+        // invoking the AI. (Space / auto-convert are the AI path.)
+        let mut s = with_mock(&["日本語"]);
+        type_str(&mut s, "github");
+        let f = s.process_key(Key::new(keysym::RETURN, 0));
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "github");
+        assert!(s.is_empty());
     }
 
     #[test]

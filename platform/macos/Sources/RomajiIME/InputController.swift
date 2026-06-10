@@ -56,15 +56,15 @@ final class InputController: IMKInputController {
         DebugLog.log("handle keyCode=\(event.keyCode) -> sym=0x\(String(sym, radix: 16)) mods=\(mods)")
         if sym == 0 { return false }
 
-        // Space / Enter trigger immediate AI conversion while composing. There is
-        // no mode switching — the AI converts Japanese + English together. begin
-        // returns 0 when AI is unavailable or candidates are already shown, so we
-        // fall through to normal handling (cycle candidates / commit).
+        // Space triggers immediate AI conversion while composing (auto-convert on
+        // pause does too). Enter does NOT convert — it commits as-is (handled by
+        // the engine). begin returns 0 when AI is unavailable or candidates are
+        // already shown, so we fall through to normal handling.
         let isShortcut = mods & ((1 << 2) | (1 << 3)) != 0
-        if (sym == 0x20 || sym == 0xFF0D) && !isShortcut && !Self.isSecureInput() {
+        if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
             let (before, after) = Self.surroundingContext(client)
             let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
-            DebugLog.log("convert-key sym=0x\(String(sym, radix: 16)) -> beginAiConvert id=\(id)")
+            DebugLog.log("Space -> beginAiConvert id=\(id)")
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
