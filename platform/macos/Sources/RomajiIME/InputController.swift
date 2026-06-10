@@ -141,21 +141,24 @@ final class InputController: IMKInputController {
     private func startConverting(reqId: UInt64, client: IMKTextInput) {
         converting = true
         let start = Date()
+        // Immediate feedback while the (~0.7s) round trip is in flight.
+        CandidateWindow.shared.showStatus("変換中…", caret: caretRect(client))
         func poll() {
             guard converting, let session = session else { return }
             switch session.pollAiResult(reqId) {
-            case 1:  // ready: candidates populated, preedit = top candidate
+            case 1:  // final: full candidate list ready
                 converting = false
-                NSLog("RomajiIME: AI ready -> %@", session.preedit())
                 DebugLog.log("AI ready -> '\(session.preedit())' (\(session.candidateCount()) candidates)")
                 render(session, client: client)
-            case -1:  // error: stay composing, leave the local kana visible
+            case 2:  // streaming: partial candidates — show them and keep polling
+                render(session, client: client)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: poll)
+            case -1:  // error: stay composing, leave the romaji/kana visible
                 converting = false
-                NSLog("RomajiIME: AI error/unavailable -> falling back to kana")
                 DebugLog.log("AI error -> fallback. detail: \(session.lastError())")
                 render(session, client: client)
             default:  // pending
-                if Date().timeIntervalSince(start) > 5.0 {
+                if Date().timeIntervalSince(start) > 8.0 {
                     converting = false
                     render(session, client: client)
                 } else {

@@ -24,11 +24,14 @@ enum Mode {
     Candidates,
 }
 
-/// Result of an in-flight AI request, written by the background thread.
-enum Slot {
-    Pending,
-    Done(Vec<String>),
-    Failed(String),
+/// Shared state of an in-flight (possibly streaming) AI request, updated by the
+/// background thread: `candidates` grows as the model streams, `done` flips when
+/// finished, `error` is set on failure.
+#[derive(Default)]
+struct Slot {
+    candidates: Vec<String>,
+    done: bool,
+    error: Option<String>,
 }
 
 /// State for a single input context.
@@ -281,55 +284,71 @@ impl Session {
         };
         let id = self.next_req;
         self.next_req += 1;
-        let slot = Arc::new(Mutex::new(Slot::Pending));
+        let slot = Arc::new(Mutex::new(Slot::default()));
         self.slots.insert(id, slot.clone());
 
         std::thread::spawn(move || {
-            let result = converter.convert(&req);
-            let mut guard = slot.lock().unwrap();
-            *guard = match result {
-                Ok(cands) => Slot::Done(cands),
-                Err(e) => Slot::Failed(e.to_string()),
+            // Stream partial candidates into the slot as the model generates them.
+            let result = {
+                let mut sink = |cands: Vec<String>| {
+                    if let Ok(mut s) = slot.lock() {
+                        s.candidates = cands;
+                    }
+                };
+                converter.convert_streaming(&req, &mut sink)
             };
+            if let Ok(mut s) = slot.lock() {
+                match result {
+                    Ok(()) => s.done = true,
+                    Err(e) => {
+                        s.error = Some(e.to_string());
+                        s.done = true;
+                    }
+                }
+            }
         });
         Some(id)
     }
 
-    /// Poll a conversion started by [`Session::begin_ai_convert`]. On
-    /// [`AiPoll::Ready`] the candidate list is populated and the session enters
-    /// candidate mode.
+    /// Poll a conversion started by [`Session::begin_ai_convert`]. Returns
+    /// [`AiPoll::Streaming`] once partial candidates are available (and more may
+    /// arrive), [`AiPoll::Ready`] when finished, or [`AiPoll::Error`]. On the
+    /// first non-empty result the session enters candidate mode.
     pub fn poll_ai_result(&mut self, req_id: u64) -> AiPoll {
         let slot = match self.slots.get(&req_id) {
             Some(s) => s.clone(),
             None => return AiPoll::Error("unknown request".to_owned()),
         };
-        let outcome = {
+        let (cands, done, error) = {
             let guard = slot.lock().unwrap();
-            match &*guard {
-                Slot::Pending => None,
-                Slot::Done(c) => Some(Ok(c.clone())),
-                Slot::Failed(e) => Some(Err(e.clone())),
-            }
+            (guard.candidates.clone(), guard.done, guard.error.clone())
         };
-        match outcome {
-            None => AiPoll::Pending,
-            Some(Ok(cands)) => {
+
+        if let Some(e) = error {
+            self.slots.remove(&req_id);
+            self.last_error = e.clone();
+            return AiPoll::Error(e);
+        }
+        if cands.is_empty() {
+            if done {
                 self.slots.remove(&req_id);
-                if cands.is_empty() {
-                    AiPoll::Error("no candidates".to_owned())
-                } else {
-                    self.candidates = cands;
-                    self.highlighted = 0;
-                    self.mode = Mode::Candidates;
-                    self.refresh_preedit();
-                    AiPoll::Ready
-                }
+                return AiPoll::Error("no candidates".to_owned());
             }
-            Some(Err(e)) => {
-                self.slots.remove(&req_id);
-                self.last_error = e.clone();
-                AiPoll::Error(e)
-            }
+            return AiPoll::Pending;
+        }
+
+        // Candidates available (partial or final): show them now.
+        self.candidates = cands;
+        if self.highlighted >= self.candidates.len() {
+            self.highlighted = 0;
+        }
+        self.mode = Mode::Candidates;
+        self.refresh_preedit();
+        if done {
+            self.slots.remove(&req_id);
+            AiPoll::Ready
+        } else {
+            AiPoll::Streaming
         }
     }
 }
@@ -410,9 +429,11 @@ mod tests {
 
     /// Poll until the background conversion resolves (bounded).
     fn poll_until_done(s: &mut Session, id: u64) -> AiPoll {
-        for _ in 0..200 {
+        for _ in 0..400 {
             match s.poll_ai_result(id) {
-                AiPoll::Pending => std::thread::sleep(std::time::Duration::from_millis(5)),
+                AiPoll::Pending | AiPoll::Streaming => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
                 done => return done,
             }
         }

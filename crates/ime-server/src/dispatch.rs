@@ -67,7 +67,9 @@ impl Dispatcher {
             Request::PollAiResult { sid, req_id } => match self.sessions.get_mut(&sid) {
                 Some(s) => match s.poll_ai_result(req_id) {
                     AiPoll::Pending => Response::Pending,
-                    AiPoll::Ready => Response::State(state_of(s, 0)),
+                    // Streaming partial and final both return the current state;
+                    // the Windows frontend re-polls until it stops changing.
+                    AiPoll::Streaming | AiPoll::Ready => Response::State(state_of(s, 0)),
                     AiPoll::Error(message) => Response::Error { message },
                 },
                 None => Response::Error {

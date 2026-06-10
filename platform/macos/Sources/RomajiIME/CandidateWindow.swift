@@ -61,8 +61,23 @@ final class CandidateWindow {
         if attr.length > 0 {
             attr.deleteCharacters(in: NSRange(location: attr.length - 1, length: 1))  // trailing \n
         }
-        field.attributedStringValue = attr
+        present(attr, caret: caret)
+    }
 
+    /// Show a single greyed status line (e.g. "変換中…") while the AI is working.
+    func showStatus(_ text: String, caret: NSRect) {
+        let attr = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+        present(attr, caret: caret)
+    }
+
+    /// Lay out the panel to fit `attr`, position it below the caret, and show it.
+    private func present(_ attr: NSAttributedString, caret: NSRect) {
+        field.attributedStringValue = attr
         let bounds = attr.boundingRect(
             with: NSSize(width: 600, height: 0),
             options: [.usesLineFragmentOrigin, .usesFontLeading])
@@ -72,8 +87,8 @@ final class CandidateWindow {
         panel.contentView?.frame = NSRect(origin: .zero, size: panelSize)
         panel.setContentSize(panelSize)
 
-        // Place the top-left of the panel just below the caret line. Fall back to
-        // the mouse location when the app doesn't report a caret rect.
+        // Top-left just below the caret line; fall back to the mouse location when
+        // the app doesn't report a caret rect.
         let topLeft: NSPoint
         if caret == .zero {
             let m = NSEvent.mouseLocation

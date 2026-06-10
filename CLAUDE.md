@@ -130,6 +130,12 @@ use the file log (below) + Console.app.
   `@objc(InputController)` to match `InputMethodServerControllerClass`.
 - **Auto-convert calls the API on each typing pause** (~500ms debounce) — mind
   rate limits / cost; on Gemini free tier a 429 falls back to local kana.
+- **Latency is TTFT-bound (~0.7s)**: connection reuse, response cache, smaller
+  output, and SSE streaming (`convert_streaming`, AiPoll::Streaming, frontend poll
+  code 2) are all implemented, but for short candidate lists the time-to-first-
+  token dominates, so they don't cut the felt latency much. A "変換中…" status
+  shows during the wait. Truly instant would require local conversion (out of
+  scope by product decision).
 - Rust toolchain pinned in `rust-toolchain.toml` (stable + the 4 targets).
 - Diagnostics: the macOS app writes `~/Library/Application Support/RomajiIME/debug.log`
   (key never logged); `rime_get_last_error` surfaces the last AI error.

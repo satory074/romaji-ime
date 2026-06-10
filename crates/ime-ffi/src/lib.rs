@@ -272,8 +272,9 @@ pub extern "C" fn rime_begin_ai_convert(
 }
 
 /// Poll a conversion started by [`rime_begin_ai_convert`].
-/// Returns: 0 = pending, 1 = ready (candidates/preedit updated), -1 = error or
-/// unavailable (the frontend should fall back to the local converter).
+/// Returns: 0 = pending, 1 = ready/final (candidates/preedit updated), 2 =
+/// streaming (partial candidates updated, keep polling), -1 = error/unavailable
+/// (the frontend should fall back to the local converter).
 #[no_mangle]
 pub extern "C" fn rime_poll_ai_result(session: *mut RimeSession, req_id: u64) -> i32 {
     let s = match unsafe { session.as_mut() } {
@@ -285,6 +286,10 @@ pub extern "C" fn rime_poll_ai_result(session: *mut RimeSession, req_id: u64) ->
         AiPoll::Ready => {
             s.refresh();
             1
+        }
+        AiPoll::Streaming => {
+            s.refresh();
+            2 // partial candidates available; keep polling for more
         }
         AiPoll::Error(_) => {
             s.error_c = to_cstring(s.inner.last_error());

@@ -1,7 +1,6 @@
-//! Smoke-test + latency check for the real cloud-AI converter.
+//! Smoke-test + latency/streaming check for the real cloud-AI converter.
 //! Usage: cargo run --example ai_smoke -- <data_dir_with_config.json>
 //! Hits the live API via the engine's actual HTTP path (never prints the key).
-//! Times three calls to show the effect of connection reuse and the cache.
 
 use ime_engine::ai::{converter_from_config, ConvertRequest};
 use std::path::PathBuf;
@@ -22,20 +21,23 @@ fn main() {
         println!("no converter configured (check config.json / env)");
         return;
     };
-    // 1) cold: new TLS connection. 2) different input: warm (reused) connection,
-    // no cache. 3) repeat of #1: cache hit (no network).
-    for (label, romaji) in [
-        ("cold     ", "nihongo"),
-        ("warm-conn", "kyouhaiitenki"),
-        ("cache-hit", "nihongo"),
-    ] {
-        let t = Instant::now();
-        match conv.convert(&req(romaji)) {
-            Ok(c) => println!(
-                "[{label}] {:>5} ms  {romaji:?} -> {c:?}",
-                t.elapsed().as_millis()
-            ),
-            Err(e) => println!("[{label}] ERROR: {e}"),
-        }
+
+    // Streaming: each sink callback is a growing candidate list. The first
+    // callback (first candidate) should land well before the final one.
+    println!("=== streaming: kyouhaiitenkidesune ===");
+    let t = Instant::now();
+    let mut sink = |cands: Vec<String>| {
+        println!("  +{:>5} ms  {cands:?}", t.elapsed().as_millis());
+    };
+    if let Err(e) = conv.convert_streaming(&req("kyouhaiitenkidesune"), &mut sink) {
+        println!("  ERROR: {e}");
+    }
+
+    // Same input again -> cache hit (instant, no network).
+    println!("=== cache hit (same input) ===");
+    let t2 = Instant::now();
+    match conv.convert(&req("kyouhaiitenkidesune")) {
+        Ok(c) => println!("  {:>5} ms  {c:?}", t2.elapsed().as_millis()),
+        Err(e) => println!("  ERROR: {e}"),
     }
 }

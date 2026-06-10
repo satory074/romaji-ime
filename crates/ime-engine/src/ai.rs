@@ -45,12 +45,28 @@ impl std::fmt::Display for AiError {
 pub trait Converter: Send + Sync {
     /// Blocking: return ranked Japanese candidates (best first).
     fn convert(&self, req: &ConvertRequest) -> Result<Vec<String>, AiError>;
+
+    /// Stream candidates as they are generated, calling `sink` with the growing
+    /// list each time more become available (so the frontend can show the first
+    /// candidate at time-to-first-token rather than waiting for completion).
+    /// Default: non-streaming — deliver everything in one shot.
+    fn convert_streaming(
+        &self,
+        req: &ConvertRequest,
+        sink: &mut dyn FnMut(Vec<String>),
+    ) -> Result<(), AiError> {
+        let all = self.convert(req)?;
+        sink(all);
+        Ok(())
+    }
 }
 
 /// Result of polling an in-flight conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiPoll {
     Pending,
+    /// Partial candidates are available and more may still arrive (streaming).
+    Streaming,
     Ready,
     Error(String),
 }
@@ -68,9 +84,9 @@ pub fn system_prompt() -> &'static str {
      identifiers, and URLs in the Latin alphabet with correct casing \
      (e.g. 'github'->'GitHub', 'ok'->'OK', 'api'->'API'). Tolerate typos, \
      missing vowels, and abbreviations. Use the surrounding context if given. \
-     Respond with ONLY a JSON array of up to 4 candidate strings, best first, \
-     and nothing else. Each candidate is the conversion of the marked input \
-     only (do not include the surrounding context)."
+     Respond with up to 4 candidates, ONE PER LINE, best first — no JSON, no \
+     numbering, no quotes, no extra text. Each line is the conversion of the \
+     marked input only (do not include the surrounding context)."
 }
 
 /// Build the user message. The text to convert is wrapped in 《》 between the
@@ -103,17 +119,20 @@ pub fn parse_candidates(reply: &str) -> Vec<String> {
             }
         }
     }
-    // Last resort: each non-empty line is a candidate.
-    clean(
-        trimmed
-            .lines()
-            .map(|l| {
-                l.trim()
-                    .trim_start_matches(['-', '*', '・', ' '])
-                    .to_string()
-            })
-            .collect(),
-    )
+    // Last resort (and the normal path now that we ask for one-per-line output):
+    // each non-empty line is a candidate.
+    clean(trimmed.lines().map(clean_line).collect())
+}
+
+/// Normalize one candidate line: strip bullets, surrounding quotes/backticks.
+pub fn clean_line(line: &str) -> String {
+    line.trim()
+        .trim_start_matches(['-', '*', '・', ' '])
+        .trim()
+        .trim_matches('"')
+        .trim_matches('`')
+        .trim()
+        .to_string()
 }
 
 fn clean(v: Vec<String>) -> Vec<String> {
@@ -203,6 +222,7 @@ fn build_http_converter(_cfg: AiConfig) -> Option<Arc<dyn Converter>> {
 mod http {
     use super::*;
     use std::collections::{HashMap, VecDeque};
+    use std::io::BufRead;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -346,37 +366,70 @@ mod http {
                     .map(str::to_string),
             }
         }
+
+        fn check_key(&self) -> Result<(), AiError> {
+            if self.api_key.is_empty() && self.url.starts_with("https://") {
+                Err(AiError::Config("missing API key".into()))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn cached(&self, key: &str) -> Option<Vec<String>> {
+            self.cache.lock().ok().and_then(|c| c.get(key))
+        }
+
+        fn store(&self, key: String, value: Vec<String>) {
+            if let Ok(mut c) = self.cache.lock() {
+                c.put(key, value);
+            }
+        }
+
+        /// A POST to the API with content-type + provider auth headers set,
+        /// using the persistent keep-alive agent.
+        fn auth_request(&self) -> ureq::Request {
+            let r = self
+                .agent
+                .post(&self.url)
+                .set("content-type", "application/json");
+            match self.provider {
+                Provider::OpenAi => r.set("authorization", &format!("Bearer {}", self.api_key)),
+                Provider::Anthropic => r
+                    .set("x-api-key", &self.api_key)
+                    .set("anthropic-version", "2023-06-01"),
+            }
+        }
+
+        /// Complete candidate lines from accumulated streamed text. The trailing
+        /// line is dropped unless the text ends with a newline (it may be partial),
+        /// and JSON-looking lines are ignored (final parse recovers those).
+        fn complete_lines(content: &str) -> Vec<String> {
+            let mut lines: Vec<&str> = content.split('\n').collect();
+            if !content.ends_with('\n') {
+                lines.pop();
+            }
+            let mut out: Vec<String> = Vec::new();
+            for l in lines {
+                let c = clean_line(l);
+                if !c.is_empty() && !c.starts_with('[') && !c.starts_with('{') && !out.contains(&c)
+                {
+                    out.push(c);
+                }
+            }
+            out
+        }
     }
 
     impl Converter for HttpConverter {
         fn convert(&self, req: &ConvertRequest) -> Result<Vec<String>, AiError> {
-            if self.api_key.is_empty() && self.url.starts_with("https://") {
-                return Err(AiError::Config("missing API key".into()));
-            }
-            // Cache hit -> instant, no network.
+            self.check_key()?;
             let key = Self::cache_key(req);
-            if let Ok(cache) = self.cache.lock() {
-                if let Some(hit) = cache.get(&key) {
-                    return Ok(hit);
-                }
+            if let Some(hit) = self.cached(&key) {
+                return Ok(hit); // instant, no network
             }
-
-            // Reuse the persistent agent (keep-alive connection).
-            let mut request = self
-                .agent
-                .post(&self.url)
-                .set("content-type", "application/json");
-            request = match self.provider {
-                Provider::OpenAi => {
-                    request.set("authorization", &format!("Bearer {}", self.api_key))
-                }
-                Provider::Anthropic => request
-                    .set("x-api-key", &self.api_key)
-                    .set("anthropic-version", "2023-06-01"),
-            };
-
             let body = self.body(req).to_string();
-            let resp = request
+            let resp = self
+                .auth_request()
                 .send_string(&body)
                 .map_err(|e| AiError::Network(e.to_string()))?;
             let text = resp
@@ -389,11 +442,68 @@ mod http {
                 .ok_or_else(|| AiError::Parse("unexpected response shape".into()))?;
             let candidates = parse_candidates(&content);
             if !candidates.is_empty() {
-                if let Ok(mut cache) = self.cache.lock() {
-                    cache.put(key, candidates.clone());
-                }
+                self.store(key, candidates.clone());
             }
             Ok(candidates)
+        }
+
+        fn convert_streaming(
+            &self,
+            req: &ConvertRequest,
+            sink: &mut dyn FnMut(Vec<String>),
+        ) -> Result<(), AiError> {
+            self.check_key()?;
+            let key = Self::cache_key(req);
+            if let Some(hit) = self.cached(&key) {
+                sink(hit); // instant
+                return Ok(());
+            }
+            // SSE streaming is implemented for the OpenAI-compatible shape (incl.
+            // Gemini). Anthropic falls back to one non-streamed delivery.
+            if self.provider != Provider::OpenAi {
+                let all = self.convert(req)?;
+                sink(all);
+                return Ok(());
+            }
+
+            let mut body = self.body(req);
+            body["stream"] = serde_json::json!(true);
+            let resp = self
+                .auth_request()
+                .send_string(&body.to_string())
+                .map_err(|e| AiError::Network(e.to_string()))?;
+
+            let reader = std::io::BufReader::new(resp.into_reader());
+            let mut content = String::new();
+            let mut emitted = 0usize;
+            for line in reader.lines() {
+                let line = line.map_err(|e| AiError::Network(e.to_string()))?;
+                let data = match line.strip_prefix("data:") {
+                    Some(d) => d.trim(),
+                    None => continue, // blank / comment / non-data SSE line
+                };
+                if data == "[DONE]" {
+                    break;
+                }
+                if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+                        content.push_str(delta);
+                        let cands = Self::complete_lines(&content);
+                        if cands.len() > emitted {
+                            emitted = cands.len();
+                            sink(cands);
+                        }
+                    }
+                }
+            }
+            // Authoritative final list (parse_candidates also recovers JSON if the
+            // model ignored the one-per-line instruction).
+            let final_cands = parse_candidates(&content);
+            if !final_cands.is_empty() {
+                self.store(key, final_cands.clone());
+                sink(final_cands);
+            }
+            Ok(())
         }
     }
 
