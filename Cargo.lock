@@ -383,6 +383,7 @@ version = "0.1.0"
 name = "ime-engine"
 version = "0.1.0"
 dependencies = [
+ "native-tls",
  "serde",
  "serde_json",
  "ureq",

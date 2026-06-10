@@ -19,6 +19,7 @@ final class InputController: IMKInputController {
         if session == nil {
             session = SharedEngine.shared.newSession()
         }
+        DebugLog.log("activateServer (session=\(session == nil ? "nil" : "ok"))")
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -45,6 +46,7 @@ final class InputController: IMKInputController {
         if converting { return true }
 
         let (sym, mods) = Self.translate(event)
+        DebugLog.log("handle keyCode=\(event.keyCode) -> sym=0x\(String(sym, radix: 16)) mods=\(mods)")
         if sym == 0 { return false }
 
         // Space triggers cloud-AI conversion — the headline feature — when
@@ -56,6 +58,7 @@ final class InputController: IMKInputController {
             let (before, after) = Self.surroundingContext(client)
             let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
             NSLog("RomajiIME: Space -> beginAiConvert id=%llu", id)
+            DebugLog.log("Space -> beginAiConvert id=\(id) (secureInput=\(Self.isSecureInput()))")
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
@@ -63,6 +66,7 @@ final class InputController: IMKInputController {
         }
 
         let flags = session.processKey(sym: sym, mods: mods)
+        DebugLog.log("processKey flags=\(flags) preedit='\(session.preedit())' commit='\(session.commitText())'")
         // The C macros import as Int32; compare against the UInt32 flags.
         if flags & UInt32(RIME_CONSUMED) == 0 {
             // Not ours: let the client handle it (e.g. literal space, arrows).
@@ -93,10 +97,12 @@ final class InputController: IMKInputController {
             case 1:  // ready: candidates populated, preedit = top candidate
                 converting = false
                 NSLog("RomajiIME: AI ready -> %@", session.preedit())
+                DebugLog.log("AI ready -> '\(session.preedit())' (\(session.candidateCount()) candidates)")
                 updateMarkedText(session.preedit(), client: client)
             case -1:  // error: stay composing, leave the local kana visible
                 converting = false
                 NSLog("RomajiIME: AI error/unavailable -> falling back to kana")
+                DebugLog.log("AI error -> fallback. detail: \(session.lastError())")
                 updateMarkedText(session.preedit(), client: client)
             default:  // pending
                 if Date().timeIntervalSince(start) > 5.0 {

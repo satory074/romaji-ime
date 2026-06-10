@@ -46,6 +46,7 @@ pub struct RimeSession {
     preedit_c: CString,
     commit_c: CString,
     candidates_c: Vec<CString>,
+    error_c: CString,
 }
 
 impl RimeSession {
@@ -139,6 +140,7 @@ pub extern "C" fn rime_session_new(engine: *mut RimeEngine) -> *mut RimeSession 
         preedit_c: CString::default(),
         commit_c: CString::default(),
         candidates_c: Vec::new(),
+        error_c: CString::default(),
     });
     session.refresh();
     Box::into_raw(session)
@@ -284,7 +286,20 @@ pub extern "C" fn rime_poll_ai_result(session: *mut RimeSession, req_id: u64) ->
             s.refresh();
             1
         }
-        AiPoll::Error(_) => -1,
+        AiPoll::Error(_) => {
+            s.error_c = to_cstring(s.inner.last_error());
+            -1
+        }
+    }
+}
+
+/// The most recent AI conversion error message (empty if none). Valid until the
+/// next poll. For diagnostics / user-facing error display.
+#[no_mangle]
+pub extern "C" fn rime_get_last_error(session: *const RimeSession) -> *const c_char {
+    match unsafe { session.as_ref() } {
+        Some(s) => s.error_c.as_ptr(),
+        None => std::ptr::null(),
     }
 }
 

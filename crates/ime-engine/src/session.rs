@@ -43,6 +43,8 @@ pub struct Session {
     converter: Option<Arc<dyn Converter>>,
     next_req: u64,
     slots: HashMap<u64, Arc<Mutex<Slot>>>,
+    /// Message from the most recent failed AI conversion (for diagnostics).
+    last_error: String,
 }
 
 impl Session {
@@ -57,6 +59,7 @@ impl Session {
             converter,
             next_req: 1,
             slots: HashMap::new(),
+            last_error: String::new(),
         }
     }
 
@@ -73,6 +76,10 @@ impl Session {
     }
     pub fn commit_text(&self) -> &str {
         &self.commit
+    }
+    /// Message from the most recent failed AI conversion (empty if none).
+    pub fn last_error(&self) -> &str {
+        &self.last_error
     }
     pub fn is_empty(&self) -> bool {
         self.raw.is_empty() && self.candidates.is_empty()
@@ -311,6 +318,7 @@ impl Session {
             }
             Some(Err(e)) => {
                 self.slots.remove(&req_id);
+                self.last_error = e.clone();
                 AiPoll::Error(e)
             }
         }

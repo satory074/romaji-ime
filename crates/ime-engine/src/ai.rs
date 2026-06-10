@@ -295,8 +295,13 @@ mod http {
             if self.api_key.is_empty() && self.endpoint.starts_with("https://api.") {
                 return Err(AiError::Config("missing API key".into()));
             }
+            // ureq with only the native-tls feature needs an explicit connector;
+            // without it HTTPS fails immediately ("no TLS").
+            let connector = native_tls::TlsConnector::new()
+                .map_err(|e| AiError::Network(format!("TLS init: {e}")))?;
             let agent = ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_millis(self.timeout_ms))
+                .tls_connector(std::sync::Arc::new(connector))
                 .build();
 
             let mut request = agent

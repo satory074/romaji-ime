@@ -140,6 +140,12 @@ uint64_t rime_begin_ai_convert(struct RimeSession *session,
 int32_t rime_poll_ai_result(struct RimeSession *session, uint64_t req_id);
 
 /*
+ The most recent AI conversion error message (empty if none). Valid until the
+ next poll. For diagnostics / user-facing error display.
+ */
+const char *rime_get_last_error(const struct RimeSession *session);
+
+/*
  The C ABI version. Frontends should check this matches what they were built
  against.
  */

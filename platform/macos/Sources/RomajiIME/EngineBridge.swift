@@ -23,10 +23,12 @@ final class SharedEngine {
             engine = rime_engine_new(nil, nil)
         }
         if let e = engine {
-            NSLog("RomajiIME: engine ready, cloud-AI configured = %@",
-                  rime_engine_has_ai(e) ? "YES" : "NO (Space will commit kana)")
+            let hasAi = rime_engine_has_ai(e)
+            NSLog("RomajiIME: engine ready, cloud-AI configured = %@", hasAi ? "YES" : "NO")
+            DebugLog.log("engine ready: dataDir=\(dataDir?.path ?? "nil") hasAI=\(hasAi)")
         } else {
             NSLog("RomajiIME: rime_engine_new returned NULL")
+            DebugLog.log("engine init FAILED (rime_engine_new returned NULL)")
         }
     }
 
@@ -85,5 +87,11 @@ final class EngineSession {
     /// Poll: 0 = pending, 1 = ready (preedit/candidates updated), -1 = error.
     func pollAiResult(_ reqId: UInt64) -> Int32 {
         rime_poll_ai_result(ptr, reqId)
+    }
+
+    /// The most recent AI error message (for diagnostics).
+    func lastError() -> String {
+        guard let p = rime_get_last_error(ptr) else { return "" }
+        return String(cString: p)
     }
 }

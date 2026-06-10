@@ -11,14 +11,17 @@ description = "OS-independent core engine for the romaji IME (romaji->kana, sess
 default = ["cloud-http"]
 # Real HTTP cloud-AI converter. Off -> only the trait + mock are available, which
 # keeps the dependency footprint (and cross-compile) minimal for tests.
-cloud-http = ["dep:ureq"]
+cloud-http = ["dep:ureq", "dep:native-tls"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = "1"
 # native-tls picks the platform's TLS (Security.framework on macOS, SChannel on
-# Windows) so it cross-compiles without ring/OpenSSL.
+# Windows) so it cross-compiles without ring/OpenSSL. ureq with only the
+# native-tls feature does NOT auto-use it — we must build the agent with an
+# explicit tls_connector (see ai.rs), hence native-tls as a direct dependency.
 ureq = { version = "2", default-features = false, features = ["native-tls"], optional = true }
+native-tls = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # (mock converter lives in unit tests)
