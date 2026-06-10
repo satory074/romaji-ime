@@ -155,11 +155,13 @@ fn clean(v: Vec<String>) -> Vec<String> {
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct AiConfig {
-    pub provider: Option<String>, // "openai" (default) | "anthropic"
+    pub provider: Option<String>, // "openai" (default) | "anthropic" | "gemini"
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub endpoint: Option<String>,
     pub timeout_ms: Option<u64>,
+    pub auto_convert: Option<bool>,
+    pub auto_convert_delay_ms: Option<u64>,
 }
 
 impl AiConfig {
@@ -171,6 +173,9 @@ impl AiConfig {
             model: env("ROMAJI_IME_MODEL"),
             endpoint: env("ROMAJI_IME_ENDPOINT"),
             timeout_ms: env("ROMAJI_IME_TIMEOUT_MS").and_then(|s| s.parse().ok()),
+            auto_convert: env("ROMAJI_IME_AUTO_CONVERT").map(|v| v != "0" && v != "false"),
+            auto_convert_delay_ms: env("ROMAJI_IME_AUTO_CONVERT_DELAY_MS")
+                .and_then(|s| s.parse().ok()),
         }
     }
 
@@ -180,28 +185,58 @@ impl AiConfig {
     }
 }
 
-/// Build a converter from `{data_dir}/config.json`, falling back to environment
-/// variables. Returns `None` if AI is not configured or the `cloud-http`
-/// feature is off.
-pub fn converter_from_config(data_dir: Option<&Path>) -> Option<Arc<dyn Converter>> {
+/// Non-AI behaviour settings (also read from config.json / env).
+#[derive(Debug, Clone)]
+pub struct Settings {
+    pub auto_convert: bool,
+    pub auto_convert_delay_ms: u64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            auto_convert: true,
+            auto_convert_delay_ms: 500,
+        }
+    }
+}
+
+/// Merge `{data_dir}/config.json` with `ROMAJI_IME_*` env (env fills gaps).
+fn resolved_config(data_dir: Option<&Path>) -> AiConfig {
     let mut cfg = data_dir
         .map(|d| d.join("config.json"))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<AiConfig>(&s).ok())
         .unwrap_or_default();
-
-    // Environment fills any gaps (and works in `cargo run` / terminal contexts).
     let env = AiConfig::from_env();
     cfg.provider = cfg.provider.or(env.provider);
     cfg.api_key = cfg.api_key.or(env.api_key);
     cfg.model = cfg.model.or(env.model);
     cfg.endpoint = cfg.endpoint.or(env.endpoint);
     cfg.timeout_ms = cfg.timeout_ms.or(env.timeout_ms);
+    cfg.auto_convert = cfg.auto_convert.or(env.auto_convert);
+    cfg.auto_convert_delay_ms = cfg.auto_convert_delay_ms.or(env.auto_convert_delay_ms);
+    cfg
+}
 
+/// Build a converter from config.json / env. Returns `None` if AI is not
+/// configured or the `cloud-http` feature is off.
+pub fn converter_from_config(data_dir: Option<&Path>) -> Option<Arc<dyn Converter>> {
+    let cfg = resolved_config(data_dir);
     if !cfg.is_usable() {
         return None;
     }
     build_http_converter(cfg)
+}
+
+/// Read behaviour settings from config.json / env (with defaults).
+pub fn settings_from_config(data_dir: Option<&Path>) -> Settings {
+    let cfg = resolved_config(data_dir);
+    let d = Settings::default();
+    Settings {
+        auto_convert: cfg.auto_convert.unwrap_or(d.auto_convert),
+        auto_convert_delay_ms: cfg.auto_convert_delay_ms.unwrap_or(d.auto_convert_delay_ms),
+    }
 }
 
 #[cfg(feature = "cloud-http")]

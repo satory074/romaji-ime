@@ -33,7 +33,7 @@ use std::sync::Arc;
 /// model (one engine, many sessions) is in place from the start. Later it owns
 /// the loaded dictionary, cost model, converter configuration, and the shared
 /// learning database.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Engine {
     #[allow(dead_code)]
     config_dir: Option<PathBuf>,
@@ -41,6 +41,21 @@ pub struct Engine {
     /// Cloud-AI converter, if configured. Shared (Arc) so every session can hand
     /// it to a background thread.
     converter: Option<Arc<dyn Converter>>,
+    /// Auto-convert behaviour (read from config; defaults on/500ms).
+    ac_enabled: bool,
+    ac_delay_ms: u32,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Engine {
+            config_dir: None,
+            user_data_dir: None,
+            converter: None,
+            ac_enabled: true,
+            ac_delay_ms: 500,
+        }
+    }
 }
 
 impl Engine {
@@ -54,7 +69,7 @@ impl Engine {
         Engine {
             config_dir,
             user_data_dir,
-            converter: None,
+            ..Engine::default()
         }
     }
 
@@ -64,18 +79,31 @@ impl Engine {
         self
     }
 
-    /// Attach a cloud-AI converter built from `{user_data_dir}/config.json`
-    /// (falling back to `ROMAJI_IME_*` env vars). No-op if AI isn't configured.
+    /// Load the cloud-AI converter and behaviour settings from
+    /// `{user_data_dir}/config.json` (falling back to `ROMAJI_IME_*` env).
     pub fn with_ai_from_config(mut self) -> Self {
         if self.converter.is_none() {
             self.converter = ai::converter_from_config(self.user_data_dir.as_deref());
         }
+        let settings = ai::settings_from_config(self.user_data_dir.as_deref());
+        self.ac_enabled = settings.auto_convert;
+        self.ac_delay_ms = settings.auto_convert_delay_ms as u32;
         self
     }
 
     /// Whether cloud-AI conversion is available.
     pub fn has_ai(&self) -> bool {
         self.converter.is_some()
+    }
+
+    /// Whether to auto-convert after a typing pause.
+    pub fn auto_convert_enabled(&self) -> bool {
+        self.ac_enabled
+    }
+
+    /// Idle delay (ms) before auto-converting.
+    pub fn auto_convert_delay_ms(&self) -> u32 {
+        self.ac_delay_ms
     }
 
     /// Start a new input session (one per focused text field / IMK controller).

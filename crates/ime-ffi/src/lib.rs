@@ -127,6 +127,22 @@ pub extern "C" fn rime_engine_has_ai(engine: *const RimeEngine) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the frontend should auto-convert after a typing pause (config).
+#[no_mangle]
+pub extern "C" fn rime_auto_convert_enabled(engine: *const RimeEngine) -> bool {
+    unsafe { engine.as_ref() }
+        .map(|e| e.inner.auto_convert_enabled())
+        .unwrap_or(true)
+}
+
+/// Idle delay in milliseconds before auto-converting (config).
+#[no_mangle]
+pub extern "C" fn rime_auto_convert_delay_ms(engine: *const RimeEngine) -> u32 {
+    unsafe { engine.as_ref() }
+        .map(|e| e.inner.auto_convert_delay_ms())
+        .unwrap_or(500)
+}
+
 /// Start a new input session. Returns NULL if `engine` is NULL. Free with
 /// [`rime_session_free`]. The engine must outlive all its sessions.
 #[no_mangle]

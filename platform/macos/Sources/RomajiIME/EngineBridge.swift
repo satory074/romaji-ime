@@ -5,6 +5,10 @@ final class SharedEngine {
     static let shared = SharedEngine()
     private let engine: OpaquePointer?
 
+    /// Behaviour settings read from config at startup.
+    let autoConvertEnabled: Bool
+    let autoConvertDelayMs: Int
+
     private init() {
         // Pass a per-user data dir so the engine can read cloud-AI settings from
         // {dataDir}/config.json (env vars aren't available to a launchd-launched
@@ -24,9 +28,15 @@ final class SharedEngine {
         }
         if let e = engine {
             let hasAi = rime_engine_has_ai(e)
+            autoConvertEnabled = rime_auto_convert_enabled(e)
+            autoConvertDelayMs = Int(rime_auto_convert_delay_ms(e))
             NSLog("RomajiIME: engine ready, cloud-AI configured = %@", hasAi ? "YES" : "NO")
-            DebugLog.log("engine ready: dataDir=\(dataDir?.path ?? "nil") hasAI=\(hasAi)")
+            DebugLog.log(
+                "engine ready: dataDir=\(dataDir?.path ?? "nil") hasAI=\(hasAi) "
+                    + "autoConvert=\(autoConvertEnabled) delayMs=\(autoConvertDelayMs)")
         } else {
+            autoConvertEnabled = true
+            autoConvertDelayMs = 500
             NSLog("RomajiIME: rime_engine_new returned NULL")
             DebugLog.log("engine init FAILED (rime_engine_new returned NULL)")
         }

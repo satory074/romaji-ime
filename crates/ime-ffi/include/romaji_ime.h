@@ -66,6 +66,16 @@ void rime_engine_free(struct RimeEngine *engine);
 bool rime_engine_has_ai(const struct RimeEngine *engine);
 
 /*
+ Whether the frontend should auto-convert after a typing pause (config).
+ */
+bool rime_auto_convert_enabled(const struct RimeEngine *engine);
+
+/*
+ Idle delay in milliseconds before auto-converting (config).
+ */
+uint32_t rime_auto_convert_delay_ms(const struct RimeEngine *engine);
+
+/*
  Start a new input session. Returns NULL if `engine` is NULL. Free with
  [`rime_session_free`]. The engine must outlive all its sessions.
  */
@@ -134,8 +144,9 @@ uint64_t rime_begin_ai_convert(struct RimeSession *session,
 
 /*
  Poll a conversion started by [`rime_begin_ai_convert`].
- Returns: 0 = pending, 1 = ready (candidates/preedit updated), -1 = error or
- unavailable (the frontend should fall back to the local converter).
+ Returns: 0 = pending, 1 = ready/final (candidates/preedit updated), 2 =
+ streaming (partial candidates updated, keep polling), -1 = error/unavailable
+ (the frontend should fall back to the local converter).
  */
 int32_t rime_poll_ai_result(struct RimeSession *session, uint64_t req_id);
 

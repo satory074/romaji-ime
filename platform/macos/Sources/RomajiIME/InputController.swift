@@ -15,8 +15,6 @@ final class InputController: IMKInputController {
     private var converting = false
     /// Monotonic token; bumped on every key to cancel a pending auto-convert.
     private var autoConvertToken = 0
-    /// Idle delay before auto-converting once typing stops.
-    private let autoConvertDelayMs = 500
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -91,8 +89,10 @@ final class InputController: IMKInputController {
     /// composition automatically. Cancelled if another key arrives (token check)
     /// or if AI is unavailable / nothing is composing (begin returns 0).
     private func scheduleAutoConvert(client: IMKTextInput) {
+        guard SharedEngine.shared.autoConvertEnabled else { return }
         let token = autoConvertToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(autoConvertDelayMs)) { [weak self] in
+        let delayMs = SharedEngine.shared.autoConvertDelayMs
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
             guard let self = self, token == self.autoConvertToken, !self.converting else { return }
             guard let session = self.session, !session.preedit().isEmpty else { return }
             let (before, after) = Self.surroundingContext(client)

@@ -22,5 +22,9 @@
     "model": "your-local-model"
   },
 
-  "timeout_ms": 5000
+  "timeout_ms": 5000,
+
+  "_behaviour": "auto_convert: convert automatically after a typing pause (Space always converts; Enter commits as-is). auto_convert_delay_ms: idle wait before that.",
+  "auto_convert": true,
+  "auto_convert_delay_ms": 500
 }

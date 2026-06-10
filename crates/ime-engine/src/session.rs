@@ -261,6 +261,18 @@ impl Session {
         flags::PREEDIT | flags::CANDIDATES
     }
 
+    /// Append the raw romaji (as-typed lowercase, then uppercased) to the AI
+    /// candidate list as last-resort "exactly what I typed" choices. Skips empties
+    /// and duplicates.
+    fn with_romaji_fallbacks(mut candidates: Vec<String>, raw: &str) -> Vec<String> {
+        for extra in [raw.to_string(), raw.to_uppercase()] {
+            if !extra.is_empty() && !candidates.contains(&extra) {
+                candidates.push(extra);
+            }
+        }
+        candidates
+    }
+
     // --- cloud-AI conversion (async) ------------------------------------
 
     /// Start an asynchronous cloud-AI conversion of the current romaji, with the
@@ -337,8 +349,10 @@ impl Session {
             return AiPoll::Pending;
         }
 
-        // Candidates available (partial or final): show them now.
-        self.candidates = cands;
+        // Candidates available (partial or final): show them now, with the raw
+        // romaji (as-typed and uppercased) appended at the bottom as a guaranteed
+        // "exactly what I typed" choice.
+        self.candidates = Self::with_romaji_fallbacks(cands, &self.raw);
         if self.highlighted >= self.candidates.len() {
             self.highlighted = 0;
         }
@@ -446,8 +460,22 @@ mod tests {
         type_str(&mut s, "nihongo");
         let id = s.begin_ai_convert("私は".into(), "が好き".into()).unwrap();
         assert_eq!(poll_until_done(&mut s, id), AiPoll::Ready);
-        assert_eq!(s.candidates(), &["日本語", "にほんご", "二本後"]);
+        // AI candidates, then the raw romaji (as-typed + uppercased) at the bottom.
+        assert_eq!(
+            s.candidates(),
+            &["日本語", "にほんご", "二本後", "nihongo", "NIHONGO"]
+        );
         assert_eq!(s.preedit(), "日本語"); // highlighted candidate shown inline
+    }
+
+    #[test]
+    fn romaji_fallbacks_dedup_when_ai_returns_same() {
+        let mut s = with_mock(&["nihongo"]);
+        type_str(&mut s, "nihongo");
+        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        poll_until_done(&mut s, id);
+        // lowercase already present -> skipped; only the uppercase is appended.
+        assert_eq!(s.candidates(), &["nihongo", "NIHONGO"]);
     }
 
     #[test]
