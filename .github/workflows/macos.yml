@@ -1,0 +1,38 @@
+name: macos
+
+# Builds + tests the shared core and assembles the universal RomajiIME.app
+# (ad-hoc signed). Uploads the bundle as an artifact.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (apple targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Test + format check
+        run: |
+          cargo test --workspace
+          cargo fmt --all --check
+
+      - name: Windows cross-compile sanity (engine/ipc/server type-check)
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo check -p ime-server --target x86_64-pc-windows-msvc
+
+      - name: Build RomajiIME.app (universal)
+        run: bash platform/macos/build.sh
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: RomajiIME-macos
+          path: platform/macos/build/RomajiIME.app

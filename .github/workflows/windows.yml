@@ -1,0 +1,49 @@
+name: windows
+
+# Builds the Windows TSF DLL (x64 + Win32) and the ime-server engine host on a
+# real Windows runner. This both VERIFIES the C++ compiles (it can't be built on
+# the macOS dev host) and produces installable artifacts to download and test.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, msvc)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test core (native Windows)
+        run: cargo test -p ime-engine -p ime-ipc -p ime-server
+
+      - name: Build ime-server (release)
+        run: cargo build --release -p ime-server
+
+      - name: Build TSF DLL (x64)
+        run: |
+          cmake -S platform/windows -B platform/windows/build-x64 -A x64
+          cmake --build platform/windows/build-x64 --config Release
+
+      - name: Build TSF DLL (Win32)
+        run: |
+          cmake -S platform/windows -B platform/windows/build-x86 -A Win32
+          cmake --build platform/windows/build-x86 --config Release
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/ime-server.exe dist/
+          Copy-Item platform/windows/build-x64/Release/RomajiIME.dll dist/RomajiIME-x64.dll
+          Copy-Item platform/windows/build-x86/Release/RomajiIME.dll dist/RomajiIME-Win32.dll
+          Copy-Item platform/windows/README.md dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: romaji-ime-windows
+          path: dist/
