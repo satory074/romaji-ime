@@ -25,13 +25,15 @@ add_library(RomajiIME SHARED
 
 target_compile_definitions(RomajiIME PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
 
-# TSF lives in these import libraries.
+# TSF is pure COM: the interface IIDs / CLSIDs (IID_ITf*, CLSID_TF_*) are in
+# uuid.lib; the rest is ole32 (COM) + advapi32 (registry) + user32 (window/timer).
+# (There is no msctf.lib.)
 target_link_libraries(RomajiIME PRIVATE
-    msctf
     ole32
     oleaut32
     advapi32
     user32
+    uuid
 )
 
 set_target_properties(RomajiIME PROPERTIES OUTPUT_NAME "RomajiIME")

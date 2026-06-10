@@ -1,7 +1,9 @@
 // Shared globals, GUIDs, and constants for the RomajiIME TSF text service.
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <msctf.h>
 #include <olectl.h>
