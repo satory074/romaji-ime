@@ -64,6 +64,16 @@ private:
     void SetCompositionText(TfEditCookie ec, ITfContext* pContext, const std::wstring& text);
     void EndComposition(TfEditCookie ec);
 
+    // Async cloud-AI conversion. Triggered on Space; the (~0.7s) LLM round trip
+    // runs in ime-server, and we poll it via a message-only window's WM_TIMER so
+    // the keystroke path is never blocked. Each poll renders the current
+    // candidates inline (mirrors the macOS first cut); a full
+    // ITfCandidateListUIElement list window is a later step.
+    bool StartAiConvert(ITfContext* pContext);
+    void StopAiTimer();
+    void PollAiOnce();
+    static LRESULT CALLBACK TimerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
     LONG _cRef;
     ITfThreadMgr* _pThreadMgr = nullptr;
     TfClientId _tid = TF_CLIENTID_NULL;
@@ -73,4 +83,12 @@ private:
     std::unique_ptr<romaji::PipeClient> _pipe;
     uint64_t _sid = 0;
     bool _hasSession = false;
+
+    HWND _hwndTimer = nullptr;            // message-only window for WM_TIMER polling
+    ITfContext* _pAiContext = nullptr;    // context under conversion (AddRef'd)
+    uint64_t _aiReqId = 0;
+    bool _aiActive = false;
+    unsigned long _aiStartTick = 0;
+    size_t _aiLastCount = 0;
+    int _aiStablePolls = 0;
 };

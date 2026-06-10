@@ -48,32 +48,32 @@ Then add **RomajiIME** under Settings ▸ Time & language ▸ Language ▸ Japan
 Keyboards, switch to it, and type e.g. `konnichiha` → こんにちは. Unregister with
 `regsvr32 /u`.
 
-## Cloud-AI conversion on Windows (design — remaining work)
+## Cloud-AI conversion on Windows (implemented — build/iterate on Windows)
 
-The engine and IPC fully support AI: `ime-server` handles `BeginAiConvert` /
-`PollAiResult`, and `PipeClient` (here) implements both calls. What remains is
-wiring them into the TIP **without blocking the input thread** — the LLM round
-trip takes ~1–2 s and the DLL runs inside every app, so polling synchronously in
-`OnKeyDown` would freeze the host (the top IME anti-pattern).
+The LLM round trip (~0.7–1 s) runs in `ime-server`; the DLL must not block on it
+(the top IME anti-pattern). Implemented flow (`TextService.cpp`):
+1. On **Space** while composing, `OnKeyDown` calls `StartAiConvert` →
+   `PipeClient::BeginAiConvert`, starts a `WM_TIMER`, and returns immediately
+   (key eaten). Enter does NOT convert (commits as-is via `ProcessKey`).
+2. A **message-only window** (`HWND_MESSAGE`, created in `ActivateEx`) polls
+   `PollAiResult` every 40 ms in `PollAiOnce` — off the keystroke path. These IPC
+   polls are fast (the server returns the current state immediately; only the LLM
+   work is async). Each poll renders the current candidates **inline** via an edit
+   session (reusing `ApplyStateInEditSession`; `state.preedit` = highlighted
+   candidate). It stops when the candidate list stabilizes or after an 8 s
+   timeout. A new keystroke cancels in-flight conversion.
+3. Candidate navigation (Space/↓ cycle, number/Enter commit, Esc cancel) flows
+   through `OnKeyDown` → `ProcessKey` (the server is in candidate mode).
 
-Planned flow (to build/iterate on Windows):
-1. On Space while composing, `OnKeyDown` calls `PipeClient::BeginAiConvert` and
-   returns immediately (key eaten); show the kana meanwhile.
-2. A message-only window polls `PollAiResult` on a `WM_TIMER` (off the keystroke
-   path). On `Ready`, run an edit session to display the highlighted candidate;
-   Space/↓ cycle, number/Enter commit, Esc cancels — mirroring the engine's
-   candidate mode (and the macOS frontend).
-3. Optionally surface the list via `ITfCandidateListUIElement` (UI-less mode);
-   an inline highlighted-candidate display (like macOS) is the simpler first cut.
-
-`begin`/`poll` must run off the UI thread (a worker thread or the timer window),
-never inside `OnKeyDown`.
+> **Unverified on macOS** — written blind against the Windows SDK; build and
+> debug on Windows. Likely needs iteration (edit-session timing, message pump).
 
 ## Scope
 
-- ✅ Romaji→kana via the shared engine, shown as a TSF composition; Enter/Space commit.
+- ✅ Romaji→kana via the shared engine, shown as a TSF composition; Enter commits as-is.
 - ✅ `ITfTextInputProcessorEx` + UI-less / immersive category registration (works in UWP/Store apps).
 - ✅ IPC client for AI (`BeginAiConvert`/`PollAiResult`) matching `docs/ipc-protocol.md`.
-- ⛔ Async AI trigger + candidate rendering in the TIP (design above) — build on Windows.
+- ✅ Async AI trigger (Space) + inline candidate rendering via WM_TIMER polling (build on Windows to verify).
+- ⛔ Full `ITfCandidateListUIElement` list window (currently inline only, like macOS's first cut).
 - ⛔ Auto-launch / restart of `ime-server.exe`, randomized pipe name, multi-client concurrency — M4/M5.
 - ⛔ Authenticode signing + installer — M5.

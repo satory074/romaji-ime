@@ -110,10 +110,27 @@ STDMETHODIMP CTextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD 
     }
 
     _pipe = std::make_unique<romaji::PipeClient>(kPipeName);
+
+    // Message-only window for off-keystroke AI polling (see StartAiConvert).
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = &CTextService::TimerWndProc;
+    wc.hInstance = g_hInst;
+    wc.lpszClassName = L"RomajiIMETimerWindow";
+    RegisterClassW(&wc);  // harmless if already registered
+    _hwndTimer = CreateWindowExW(0, L"RomajiIMETimerWindow", L"", 0, 0, 0, 0, 0,
+                                 HWND_MESSAGE, nullptr, g_hInst, nullptr);
+    if (_hwndTimer) {
+        SetWindowLongPtrW(_hwndTimer, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    }
     return S_OK;
 }
 
 STDMETHODIMP CTextService::Deactivate() {
+    StopAiTimer();
+    if (_hwndTimer) {
+        DestroyWindow(_hwndTimer);
+        _hwndTimer = nullptr;
+    }
     if (_pComposition) {
         _pComposition->Release();
         _pComposition = nullptr;
@@ -212,6 +229,18 @@ STDMETHODIMP CTextService::OnKeyDown(ITfContext* pic, WPARAM wParam, LPARAM, BOO
     if (sym == 0) return S_OK;
     if (!EnsureSession()) return S_OK;  // server unavailable -> let the app handle the key
 
+    // A new keystroke cancels any in-flight AI conversion (typing is never blocked).
+    if (_aiActive) StopAiTimer();
+
+    // Space triggers cloud-AI conversion (auto-convert-on-pause is a frontend
+    // refinement; Enter commits as-is via ProcessKey). StartAiConvert returns
+    // false when AI is unavailable or candidates already show, so we fall through.
+    const bool ctrlAlt = (mods & ((1 << 2) | (1 << 3))) != 0;
+    if (sym == 0x20 && !ctrlAlt && StartAiConvert(pic)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
     auto state = _pipe->ProcessKey(_sid, sym, mods);
     if (!state) return S_OK;  // soft failure -> fall back to the app
     if ((state->flags & romaji::kFlagConsumed) == 0) return S_OK;
@@ -235,6 +264,80 @@ STDMETHODIMP CTextService::OnKeyUp(ITfContext*, WPARAM, LPARAM, BOOL* pfEaten) {
 STDMETHODIMP CTextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* pfEaten) {
     *pfEaten = FALSE;
     return S_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Async cloud-AI conversion (polled off the keystroke path via WM_TIMER)
+// ---------------------------------------------------------------------------
+
+static constexpr UINT_PTR kAiTimerId = 1;
+
+bool CTextService::StartAiConvert(ITfContext* pContext) {
+    if (!_pipe || !_hwndTimer) return false;
+    // TODO: pass surrounding document text as context (ITfContext range read).
+    auto reqId = _pipe->BeginAiConvert(_sid, L"", L"");
+    if (!reqId) return false;  // unavailable / not composing / candidates already shown
+    _aiReqId = *reqId;
+    if (_pAiContext) _pAiContext->Release();
+    _pAiContext = pContext;
+    _pAiContext->AddRef();
+    _aiActive = true;
+    _aiStartTick = GetTickCount();
+    _aiLastCount = 0;
+    _aiStablePolls = 0;
+    SetTimer(_hwndTimer, kAiTimerId, 40, nullptr);  // poll the fast IPC every 40ms
+    return true;
+}
+
+void CTextService::StopAiTimer() {
+    if (_hwndTimer) KillTimer(_hwndTimer, kAiTimerId);
+    _aiActive = false;
+    if (_pAiContext) {
+        _pAiContext->Release();
+        _pAiContext = nullptr;
+    }
+}
+
+void CTextService::PollAiOnce() {
+    if (!_aiActive || !_pipe || !_pAiContext) return;
+
+    auto outcome = _pipe->PollAiResult(_sid, _aiReqId);
+    switch (outcome.kind) {
+        case romaji::PipeClient::PollKind::Pending:
+            break;  // not ready yet
+        case romaji::PipeClient::PollKind::Ready: {
+            // Render the current candidates inline (state.preedit = highlighted
+            // candidate) by reusing the edit-session path.
+            auto* pES = new CApplyStateEditSession(this, _pAiContext, outcome.state);
+            HRESULT hr = S_OK;
+            _pAiContext->RequestEditSession(_tid, pES, TF_ES_READWRITE | TF_ES_SYNC, &hr);
+            pES->Release();
+            // The dispatcher reports streaming and final identically, so stop once
+            // the candidate list stops growing.
+            if (outcome.state.candidates.size() == _aiLastCount) {
+                if (++_aiStablePolls >= 3) StopAiTimer();
+            } else {
+                _aiLastCount = outcome.state.candidates.size();
+                _aiStablePolls = 0;
+            }
+            break;
+        }
+        case romaji::PipeClient::PollKind::Error:
+            StopAiTimer();  // leave the romaji for the user to edit/retry
+            break;
+    }
+    if (_aiActive && (GetTickCount() - _aiStartTick) > 8000) {
+        StopAiTimer();  // safety timeout
+    }
+}
+
+LRESULT CALLBACK CTextService::TimerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_TIMER && wParam == kAiTimerId) {
+        auto* self = reinterpret_cast<CTextService*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (self) self->PollAiOnce();
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 // ---------------------------------------------------------------------------

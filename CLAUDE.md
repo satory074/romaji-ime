@@ -158,11 +158,13 @@ or `ROMAJI_IME_*` env vars; see `docs/config.example.json`. `Engine::new` is pur
   candidate-list window below the caret (`CandidateWindow.swift`, custom NSPanel —
   not IMKCandidates) with Space/↓ cycle, number/Enter commit, Esc cancel. Builds
   via `platform/macos/build.sh`.
-- **Windows:** `ime-server` (Rust) hosts the engine + AI over a named pipe;
-  cross-compiles for x86_64/i686-pc-windows-msvc; dispatcher/transport
-  unit-tested. The C++ TSF DLL does romaji→kana (M1) and has the IPC client incl.
-  AI calls; its **async AI trigger + candidate UI must still be built/iterated on
-  Windows** (design in `platform/windows/README.md`).
+- **Windows (code complete, build/verify on Windows):** `ime-server` (Rust) hosts
+  the engine + AI over a named pipe; cross-compiles for x86_64/i686-pc-windows-msvc;
+  dispatcher/transport unit-tested. The C++ TSF DLL does romaji→kana, Enter-commits-
+  as-is, and **async AI on Space** (message-only window + WM_TIMER polling the fast
+  IPC off the keystroke path; inline candidate rendering). Cannot be compiled on
+  macOS — build/iterate on Windows. Full `ITfCandidateListUIElement` list window is
+  the remaining UI item. See `platform/windows/README.md`.
 
 Pending: Windows AI trigger/candidate UI; M3 (local dictionary/Viterbi fallback);
 M4 (learning); M5 (signing/installers/notarization).
