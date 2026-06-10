@@ -60,9 +60,22 @@ done
 lipo -create "${EXES[@]}" -output "$APP/Contents/MacOS/RomajiIME"
 rm -f "${EXES[@]}"
 
-echo ">> Ad-hoc code signing"
-codesign --force --sign - "$APP/Contents/Frameworks/libime_ffi.dylib"
-codesign --force --sign - "$APP"
+# Sign. Default is ad-hoc ("-") for local dev. Set CODESIGN_IDENTITY to a
+# "Developer ID Application: …" identity for a distributable (Hardened Runtime)
+# build — Hardened Runtime alone (no sandbox) allows the cloud-AI network call
+# and satisfies notarization. Inside-out: dylib first, then the app.
+IDENTITY="${CODESIGN_IDENTITY:--}"
+if [ "$IDENTITY" = "-" ]; then
+    echo ">> Ad-hoc code signing"
+    codesign --force --sign - "$APP/Contents/Frameworks/libime_ffi.dylib"
+    codesign --force --sign - "$APP"
+else
+    echo ">> Signing with Developer ID + Hardened Runtime: $IDENTITY"
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+        "$APP/Contents/Frameworks/libime_ffi.dylib"
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+    codesign --verify --strict --verbose=2 "$APP"
+fi
 
 echo ">> Built: $APP"
 file "$APP/Contents/MacOS/RomajiIME"

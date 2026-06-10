@@ -53,6 +53,28 @@ highlighted candidate is also shown inline as the marked text. Auto-convert call
 the API on each typing pause — see the cost note in the main README /
 `docs/config.example.json`.
 
+## Distribution (signed `.pkg` + notarization)
+
+`package.sh` builds a `.pkg` that installs `RomajiIME.app` to
+`/Library/Input Methods` (system-wide). It signs + notarizes when you provide a
+Developer ID identity; otherwise it makes an unsigned `.pkg` for local testing.
+
+One-time setup (Apple Developer account):
+1. Install your **Developer ID Application** and **Developer ID Installer**
+   certs in the keychain (`security find-identity -v` to confirm).
+2. `xcrun notarytool store-credentials romaji-ime-notary --apple-id you@example.com --team-id TEAMID --password <app-specific-password>`
+
+Then:
+```bash
+CODESIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" \
+INSTALLER_IDENTITY="Developer ID Installer: NAME (TEAMID)" \
+NOTARY_PROFILE=romaji-ime-notary \
+platform/macos/package.sh        # -> platform/macos/build/RomajiIME.pkg
+```
+Hardened Runtime is used (no App Sandbox), which allows the cloud-AI network
+call and satisfies notarization. CI can do this too — see
+`.github/workflows/release.yml` (gated on repo secrets).
+
 ## Verifying without a GUI
 
 You can confirm the bundle links the engine and starts its IMKServer:

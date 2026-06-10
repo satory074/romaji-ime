@@ -166,5 +166,11 @@ or `ROMAJI_IME_*` env vars; see `docs/config.example.json`. `Engine::new` is pur
   macOS — build/iterate on Windows. Full `ITfCandidateListUIElement` list window is
   the remaining UI item. See `platform/windows/README.md`.
 
-Pending: Windows AI trigger/candidate UI; M3 (local dictionary/Viterbi fallback);
-M4 (learning); M5 (signing/installers/notarization).
+Done since: M4 usage learning (learning.rs, JSON store); romaji fallback candidates;
+configurable auto-convert; CI (Windows DLL builds + artifacts, macOS app); macOS M5
+distribution tooling (package.sh → signed/notarized .pkg, gated on Developer ID
+certs; release.yml CI). M3 (local dictionary) intentionally dropped — AI is the baseline.
+
+Pending: Windows runtime testing + full ITfCandidateListUIElement window (needs a
+Windows machine — code builds in CI); Windows installer + Authenticode signing;
+macOS signed/notarized .pkg requires the user's Developer ID certs + notary creds.
