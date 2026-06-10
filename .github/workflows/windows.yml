@@ -14,8 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (stable, msvc)
+      - name: Install Rust (stable, msvc) + ARM64 target
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
 
       - name: Test core (native Windows)
         run: cargo test -p ime-engine -p ime-ipc -p ime-server
@@ -33,6 +35,21 @@ jobs:
           cmake -S platform/windows -B platform/windows/build-x86 -A Win32
           cmake --build platform/windows/build-x86 --config Release
 
+      # ARM64 (Windows-on-ARM, e.g. an Apple Silicon Mac VM). Cross-compiled from
+      # the x64 runner. Best-effort: if the runner image lacks ARM64 VS build
+      # tools the rest of the artifacts still upload.
+      - name: Build ime-server (ARM64)
+        id: server_arm64
+        continue-on-error: true
+        run: cargo build --release -p ime-server --target aarch64-pc-windows-msvc
+
+      - name: Build TSF DLL (ARM64)
+        id: dll_arm64
+        continue-on-error: true
+        run: |
+          cmake -S platform/windows -B platform/windows/build-arm64 -A ARM64
+          cmake --build platform/windows/build-arm64 --config Release
+
       - name: Collect artifacts
         shell: pwsh
         run: |
@@ -40,6 +57,12 @@ jobs:
           Copy-Item target/release/ime-server.exe dist/
           Copy-Item platform/windows/build-x64/Release/RomajiIME.dll dist/RomajiIME-x64.dll
           Copy-Item platform/windows/build-x86/Release/RomajiIME.dll dist/RomajiIME-Win32.dll
+          if (Test-Path target/aarch64-pc-windows-msvc/release/ime-server.exe) {
+            Copy-Item target/aarch64-pc-windows-msvc/release/ime-server.exe dist/ime-server-arm64.exe
+          } else { Write-Host "::warning::ARM64 ime-server not built — skipping" }
+          if (Test-Path platform/windows/build-arm64/Release/RomajiIME.dll) {
+            Copy-Item platform/windows/build-arm64/Release/RomajiIME.dll dist/RomajiIME-ARM64.dll
+          } else { Write-Host "::warning::ARM64 DLL not built — skipping" }
           Copy-Item platform/windows/README.md dist/
 
       - name: Upload artifacts
