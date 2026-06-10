@@ -193,11 +193,15 @@ final class InputController: IMKInputController {
         default: break
         }
 
-        // Printable: use the base (modifier-independent) character, lowercased so
-        // Shift doesn't break romaji lookups.
-        if let chars = event.charactersIgnoringModifiers?.lowercased(),
-           let scalar = chars.unicodeScalars.first {
-            let v = scalar.value
+        // Printable: use the ACTUALLY produced character so Shift yields symbols
+        // (Shift+1 -> "!", Shift+/ -> "?"), but lowercase ASCII letters so romaji
+        // stays case-insensitive. Ctrl/Alt combos are shortcuts, not text.
+        if mods & ((1 << 2) | (1 << 3)) == 0,
+           let scalar = event.characters?.unicodeScalars.first {
+            var v = scalar.value
+            if (0x41...0x5A).contains(v) {
+                v += 0x20 // 'A'..'Z' -> 'a'..'z'
+            }
             if (0x21...0x7E).contains(v) {
                 return (v, mods)
             }
