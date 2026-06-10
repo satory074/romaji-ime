@@ -102,10 +102,14 @@ Never sends keystrokes from secure (password) fields.
 ## Status
 
 - **Core (M1+M2):** romaji→kana + cloud-AI candidate machine in `ime-engine`; 41 workspace tests.
-- **macOS (M1+M2):** `RomajiIME.app` (universal) — romaji→kana inline, **Space = AI convert**
-  with inline candidate cycling, secure-field guard. Builds via `platform/macos/build.sh`,
-  installs to `~/Library/Input Methods/`. (Enable + type is a manual GUI step; a custom
-  candidate-list window is still pending.)
+- **macOS (M1+M2): ✅ verified working end-to-end on-device.** `RomajiIME.app` (universal) —
+  romaji→kana inline, **Space = AI convert** with inline candidate cycling, secure-field guard.
+  Live Gemini conversion confirmed (konnichiha→こんにちは, 私は日本語を話します, etc.). Builds via
+  `platform/macos/build.sh`, installs to `~/Library/Input Methods/`. A custom candidate-list
+  window is still pending (candidates show inline, cycled with Space).
+  Gotcha fixed: ureq w/ only native-tls needs an explicit `.tls_connector(...)` or HTTPS fails.
+  Diagnostics: file log at `~/Library/Application Support/RomajiIME/debug.log`;
+  `cargo run -p ime-engine --example ai_smoke -- <data_dir>` tests the live API path.
 - **Windows:** `ime-server` (Rust) hosts the engine + AI over a named pipe; cross-compiles for
   x86_64/i686-pc-windows-msvc; dispatcher/transport unit-tested. The C++ TSF DLL does romaji→kana
   (M1); its **candidate UI + Space-triggered AI are still to do (M2d)** and it builds on Windows/CI.
