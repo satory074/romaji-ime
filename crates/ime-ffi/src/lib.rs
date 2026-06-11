@@ -12,6 +12,14 @@
 //! Regenerate the header after changing signatures:
 //!   `cargo run -p xtask -- gen-header`
 
+// Every exported function here is a C-ABI entry point that dereferences
+// caller-provided raw pointers. Pointer validity is the caller's contract
+// (documented per function and in `docs/c-abi.md`); each function null-checks
+// before dereferencing. `unsafe fn` would not change the emitted C signature
+// (C has no such keyword) and the only Rust callers are this crate's own tests,
+// which pass valid/null pointers deliberately — so this lint adds no safety here.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use ime_engine::{AiPoll, Engine, Key, Session};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;

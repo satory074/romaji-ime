@@ -136,7 +136,11 @@ use the file log (below) + Console.app.
   token dominates, so they don't cut the felt latency much. A "変換中…" status
   shows during the wait. Truly instant would require local conversion (out of
   scope by product decision).
-- Rust toolchain pinned in `rust-toolchain.toml` (stable + the 4 targets).
+- Rust toolchain pinned in `rust-toolchain.toml` (stable + 5 targets: 2 apple,
+  plus x86_64/i686/aarch64-pc-windows-msvc — ARM64 for Windows-on-ARM, e.g. an
+  Apple Silicon VM). CI runs `cargo clippy --workspace -- -D warnings`; `ime-ffi`
+  carries a crate-level `allow(clippy::not_unsafe_ptr_arg_deref)` (every fn is a
+  null-checking C-ABI entry point — see the note atop `crates/ime-ffi/src/lib.rs`).
 - Diagnostics: the macOS app writes `~/Library/Application Support/RomajiIME/debug.log`
   (key never logged); `rime_get_last_error` surfaces the last AI error.
 

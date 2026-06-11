@@ -18,10 +18,11 @@ jobs:
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Test + format check
+      - name: Test + format + lint check
         run: |
           cargo test --workspace
           cargo fmt --all --check
+          cargo clippy --workspace -- -D warnings
 
       - name: Windows cross-compile sanity (engine/ipc/server type-check)
         run: |
