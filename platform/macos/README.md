@@ -57,6 +57,27 @@ highlighted candidate is also shown inline as the marked text. Auto-convert call
 the API on each typing pause — see the cost note in the main README /
 `docs/config.example.json`.
 
+## Send it to a (Mac) friend — unsigned zip, bring-your-own-free-key
+
+For a handful of (semi-technical) friends, you don't need an Apple Developer
+account. `package-zip.sh` bundles the built app with an end-user `install.sh`
+and `INSTALL.md`:
+
+```bash
+platform/macos/package-zip.sh        # -> build/RomajiIME-macos.zip
+```
+
+Send that zip. The friend unzips and runs `./install.sh`, which clears the
+Gatekeeper quarantine (ad-hoc build, not notarized), installs to
+`~/Library/Input Methods/`, and writes `config.json` from **their own free
+Gemini key** (https://aistudio.google.com/apikey) — no key of yours is ever
+shipped. `INSTALL.md` is the friend-facing walkthrough. The cloud-AI feature
+needs a key, so each user supplies their own (free tier is plenty).
+
+Caveat: an un-notarized input method still trips Gatekeeper on download — the
+script's `xattr` de-quarantine is the "I trust this" step. For a frictionless
+double-click installer for non-technical users, notarize instead (below).
+
 ## Distribution (signed `.pkg` + notarization)
 
 `package.sh` builds a `.pkg` that installs `RomajiIME.app` to
