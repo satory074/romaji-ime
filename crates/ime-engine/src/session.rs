@@ -2,8 +2,17 @@
 //!
 //! Two modes:
 //!   - **Composing**: the user types romaji, shown as hiragana (see [`romaji`]).
-//!   - **Candidates**: after a cloud-AI conversion, a ranked candidate list is
-//!     shown; Space/arrows cycle, Enter / number keys commit, Escape cancels.
+//!     An *auto-convert* (typing-pause) conversion populates `candidates` while
+//!     **staying in Composing** — a non-committal **preview**: the preedit stays
+//!     the raw romaji and **Enter commits it as-typed**. The user **Space**s to
+//!     *engage* the preview (→ Candidates) or keeps typing to dismiss it.
+//!   - **Candidates**: reached by an *explicit* Space conversion, or by Space-ing
+//!     an auto-convert preview. A ranked candidate list is shown; Space/arrows
+//!     cycle, Enter / number keys commit, Escape cancels back to the romaji.
+//!
+//! This split is the whole answer to "sometimes I want Enter to convert, sometimes
+//! not": conversion only becomes *committable by Enter* once **you** press Space.
+//! It never depends on whether the auto-convert pause happened to fire.
 //!
 //! Cloud-AI conversion is asynchronous: [`Session::begin_ai_convert`] spawns a
 //! background thread for the (slow) LLM call and returns a request id;
@@ -23,6 +32,16 @@ use std::sync::{Arc, Mutex};
 enum Mode {
     Composing,
     Candidates,
+}
+
+/// CANDIDATES flag iff an auto-convert preview was just torn down, so the
+/// frontend hides its suggestion window.
+const fn preview_flag(had_preview: bool) -> u32 {
+    if had_preview {
+        flags::CANDIDATES
+    } else {
+        0
+    }
 }
 
 /// Shared state of an in-flight (possibly streaming) AI request, updated by the
@@ -51,6 +70,10 @@ pub struct Session {
     last_error: String,
     /// Shared usage learning (promotes previously-chosen candidates).
     learning: Arc<Mutex<Learning>>,
+    /// Whether the in-flight conversion was triggered explicitly (Space) — and so
+    /// should enter Candidates mode on completion — vs. by the auto-convert pause,
+    /// which only shows a preview (stays in Composing). Set by `begin_ai_convert`.
+    convert_explicit: bool,
 }
 
 impl Session {
@@ -70,6 +93,7 @@ impl Session {
             slots: HashMap::new(),
             last_error: String::new(),
             learning,
+            convert_explicit: false,
         }
     }
 
@@ -145,9 +169,16 @@ impl Session {
     /// mode, kana offline) — no AI conversion. Used by Enter, and by Space when
     /// AI is unavailable.
     fn commit_composition(&mut self) -> u32 {
+        // If an auto-convert preview was showing, signal CANDIDATES so the
+        // frontend tears the suggestion list down along with the commit.
+        let had_preview = !self.candidates.is_empty();
         self.commit = self.preedit.clone();
         self.clear_all();
-        flags::CONSUMED | flags::PREEDIT | flags::COMMIT
+        let mut f = flags::CONSUMED | flags::PREEDIT | flags::COMMIT;
+        if had_preview {
+            f |= flags::CANDIDATES;
+        }
+        f
     }
 
     fn commit_candidate(&mut self, index: usize) -> u32 {
@@ -176,25 +207,45 @@ impl Session {
 
     fn process_key_composing(&mut self, key: Key) -> u32 {
         if key.sym == keysym::SPACE {
-            // Local fallback: commit as displayed. (The frontend prefers AI
-            // conversion by calling begin_ai_convert on Space first; this is only
-            // reached when AI is unavailable.)
-            return if self.raw.is_empty() {
-                0
-            } else {
-                self.commit_composition()
-            };
+            if self.raw.is_empty() {
+                return 0;
+            }
+            if !self.candidates.is_empty() {
+                // An auto-convert preview is showing: Space *engages* it (switches
+                // to candidate selection) rather than re-running the conversion.
+                // The frontend reaches here because begin_ai_convert returns None
+                // while a preview is present, so it falls through to process_key.
+                self.mode = Mode::Candidates;
+                self.highlighted = 0;
+                self.refresh_preedit();
+                return flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES;
+            }
+            // No preview to engage (AI unavailable): commit as displayed. The
+            // frontend prefers AI by calling begin_ai_convert on Space first; this
+            // is only reached when there is no converter.
+            return self.commit_composition();
         }
         if let Some(c) = key.printable_char() {
+            // Typing dismisses any stale auto-convert preview and resumes editing.
+            let had_preview = !self.candidates.is_empty();
             self.raw.push(c);
+            if had_preview {
+                self.candidates.clear();
+                self.highlighted = 0;
+            }
             self.refresh_preedit();
-            return flags::CONSUMED | flags::PREEDIT;
+            return flags::CONSUMED | flags::PREEDIT | preview_flag(had_preview);
         }
         match key.sym {
             keysym::BACKSPACE => {
+                let had_preview = !self.candidates.is_empty();
                 if self.raw.pop().is_some() {
+                    if had_preview {
+                        self.candidates.clear();
+                        self.highlighted = 0;
+                    }
                     self.refresh_preedit();
-                    flags::CONSUMED | flags::PREEDIT
+                    flags::CONSUMED | flags::PREEDIT | preview_flag(had_preview)
                 } else {
                     0
                 }
@@ -203,16 +254,26 @@ impl Session {
                 if self.raw.is_empty() {
                     0
                 } else {
+                    // Commits the preedit, which in Composing is the raw romaji —
+                    // never the AI preview. This is the "Enter = as-typed" half of
+                    // the "Space converts, Enter commits what you see" model.
                     self.commit_composition()
                 }
             }
             keysym::ESCAPE => {
-                if self.raw.is_empty() {
-                    0
-                } else {
+                if !self.candidates.is_empty() {
+                    // First Esc dismisses the auto-convert preview, keeping the
+                    // romaji so the user can keep editing.
+                    self.candidates.clear();
+                    self.highlighted = 0;
+                    self.refresh_preedit();
+                    flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES
+                } else if !self.raw.is_empty() {
                     self.raw.clear();
                     self.refresh_preedit();
                     flags::CONSUMED | flags::PREEDIT
+                } else {
+                    0
                 }
             }
             _ => 0,
@@ -292,13 +353,19 @@ impl Session {
     /// already showing.
     pub fn begin_ai_convert(
         &mut self,
+        explicit: bool,
         context_before: String,
         context_after: String,
     ) -> Option<u64> {
         let converter = self.converter.clone()?;
-        if self.mode != Mode::Composing || self.raw.is_empty() {
+        // Nothing to convert, already selecting candidates, or a preview is
+        // already showing (Space should *engage* that preview via process_key,
+        // not kick off another conversion). Returning None makes the frontend
+        // fall through to process_key for the engage/cycle path.
+        if self.mode != Mode::Composing || self.raw.is_empty() || !self.candidates.is_empty() {
             return None;
         }
+        self.convert_explicit = explicit;
         let req = ConvertRequest {
             romaji: self.raw.clone(),
             kana: romaji::flush(&self.raw),
@@ -336,7 +403,8 @@ impl Session {
     /// Poll a conversion started by [`Session::begin_ai_convert`]. Returns
     /// [`AiPoll::Streaming`] once partial candidates are available (and more may
     /// arrive), [`AiPoll::Ready`] when finished, or [`AiPoll::Error`]. On the
-    /// first non-empty result the session enters candidate mode.
+    /// first non-empty result an *explicit* conversion enters candidate mode; an
+    /// auto-convert shows a preview (stays composing — see `convert_explicit`).
     pub fn poll_ai_result(&mut self, req_id: u64) -> AiPoll {
         let slot = match self.slots.get(&req_id) {
             Some(s) => s.clone(),
@@ -371,7 +439,15 @@ impl Session {
         if self.highlighted >= self.candidates.len() {
             self.highlighted = 0;
         }
-        self.mode = Mode::Candidates;
+        // Explicit (Space) conversions engage candidate selection immediately, so
+        // Enter commits the chosen candidate. Auto-convert (typing pause) shows a
+        // non-committal PREVIEW: stay in Composing so the preedit remains the raw
+        // romaji and Enter commits as-typed; the user presses Space to engage.
+        if self.convert_explicit {
+            self.mode = Mode::Candidates;
+        } else {
+            self.highlighted = 0; // preview points at the top suggestion
+        }
         self.refresh_preedit();
         if done {
             self.slots.remove(&req_id);
@@ -433,7 +509,7 @@ mod tests {
     fn begin_ai_returns_none_without_converter() {
         let mut s = no_ai();
         type_str(&mut s, "ka");
-        assert_eq!(s.begin_ai_convert(String::new(), String::new()), None);
+        assert_eq!(s.begin_ai_convert(true, String::new(), String::new()), None);
     }
 
     // ---- cloud-AI conversion with a mock converter ----------------------
@@ -480,7 +556,9 @@ mod tests {
     fn ai_convert_populates_candidates_and_enters_candidate_mode() {
         let mut s = with_mock(&["日本語", "にほんご", "二本後"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert("私は".into(), "が好き".into()).unwrap();
+        let id = s
+            .begin_ai_convert(true, "私は".into(), "が好き".into())
+            .unwrap();
         assert_eq!(poll_until_done(&mut s, id), AiPoll::Ready);
         // AI candidates, then the raw romaji (as-typed + uppercased) at the bottom.
         assert_eq!(
@@ -494,7 +572,9 @@ mod tests {
     fn learning_promotes_previously_selected() {
         let mut s = with_mock(&["日本語", "にほんご", "二本後"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         assert_eq!(s.candidates()[0], "日本語"); // default order first time
 
@@ -505,7 +585,9 @@ mod tests {
 
         // Same reading again -> the learned candidate is now first.
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         assert_eq!(s.candidates()[0], "にほんご");
     }
@@ -514,7 +596,9 @@ mod tests {
     fn romaji_fallbacks_dedup_when_ai_returns_same() {
         let mut s = with_mock(&["nihongo"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         // lowercase already present -> skipped; only the uppercase is appended.
         assert_eq!(s.candidates(), &["nihongo", "NIHONGO"]);
@@ -524,7 +608,9 @@ mod tests {
     fn space_cycles_candidates_enter_commits() {
         let mut s = with_mock(&["日本語", "にほんご"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
 
         s.process_key(Key::new(keysym::SPACE, 0)); // -> highlight 1
@@ -539,7 +625,9 @@ mod tests {
     fn number_key_selects_candidate() {
         let mut s = with_mock(&["一", "二", "三"]);
         type_str(&mut s, "ichi");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         let f = s.process_key(Key::new('2' as u32, 0));
         assert!(f & flags::COMMIT != 0);
@@ -550,30 +638,38 @@ mod tests {
     fn escape_cancels_back_to_romaji() {
         let mut s = with_mock(&["日本語"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         s.process_key(Key::new(keysym::ESCAPE, 0));
         // Back to composing: the romaji is preserved (AI mode shows raw romaji).
         assert_eq!(s.preedit(), "nihongo");
         // And a second conversion can be started.
-        assert!(s.begin_ai_convert(String::new(), String::new()).is_some());
+        assert!(s
+            .begin_ai_convert(true, String::new(), String::new())
+            .is_some());
     }
 
     #[test]
     fn begin_ai_returns_none_in_candidate_mode() {
         let mut s = with_mock(&["日本語"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         // Already showing candidates -> no new conversion (frontend will cycle).
-        assert_eq!(s.begin_ai_convert(String::new(), String::new()), None);
+        assert_eq!(s.begin_ai_convert(true, String::new(), String::new()), None);
     }
 
     #[test]
     fn ai_failure_is_reported() {
         let mut s = Session::new(Some(Arc::new(FailingConverter)), fresh_learning());
         type_str(&mut s, "ka");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         assert!(matches!(poll_until_done(&mut s, id), AiPoll::Error(_)));
         // Still composing (AI mode shows raw romaji); frontend can retry/fallback.
         assert_eq!(s.preedit(), "ka");
@@ -583,7 +679,9 @@ mod tests {
     fn typing_in_candidate_mode_commits_then_continues() {
         let mut s = with_mock(&["日本語"]);
         type_str(&mut s, "nihongo");
-        let id = s.begin_ai_convert(String::new(), String::new()).unwrap();
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
         poll_until_done(&mut s, id);
         // Typing 'k' commits 日本語 and starts a new composition.
         let f = s.process_key(Key::new('k' as u32, 0));
@@ -603,6 +701,86 @@ mod tests {
         assert!(f & flags::COMMIT != 0);
         assert_eq!(s.commit_text(), "github");
         assert!(s.is_empty());
+    }
+
+    // ---- auto-convert PREVIEW (explicit = false) ------------------------
+    // "Space converts, Enter commits what you see": an auto-convert (typing
+    // pause) is a non-committal preview — Enter still commits the raw romaji
+    // until the user presses Space to engage.
+
+    #[test]
+    fn auto_convert_preview_keeps_raw_and_enter_commits_raw() {
+        let mut s = with_mock(&["日本語", "にほんご"]);
+        type_str(&mut s, "nihongo");
+        // explicit = false: the typing-pause path.
+        let id = s
+            .begin_ai_convert(false, String::new(), String::new())
+            .unwrap();
+        assert_eq!(poll_until_done(&mut s, id), AiPoll::Ready);
+        // Candidates are previewed below…
+        assert_eq!(
+            s.candidates(),
+            &["日本語", "にほんご", "nihongo", "NIHONGO"]
+        );
+        // …but the preedit is still the raw romaji (NOT the top candidate).
+        assert_eq!(s.preedit(), "nihongo");
+        // Enter commits exactly that — no AI.
+        let f = s.process_key(Key::new(keysym::RETURN, 0));
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "nihongo");
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn space_engages_preview_then_enter_commits_candidate() {
+        let mut s = with_mock(&["日本語", "にほんご"]);
+        type_str(&mut s, "nihongo");
+        let id = s
+            .begin_ai_convert(false, String::new(), String::new())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        assert_eq!(s.preedit(), "nihongo"); // preview: raw still shown
+
+        // Space engages the preview → top candidate becomes the selection.
+        let f = s.process_key(Key::new(keysym::SPACE, 0));
+        assert!(f & flags::CONSUMED != 0);
+        assert_eq!(s.preedit(), "日本語");
+        // A further Space now cycles (we're in candidate selection).
+        s.process_key(Key::new(keysym::SPACE, 0));
+        assert_eq!(s.preedit(), "にほんご");
+        // Enter commits the selected candidate.
+        let f = s.process_key(Key::new(keysym::RETURN, 0));
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "にほんご");
+    }
+
+    #[test]
+    fn typing_dismisses_preview_and_resumes_composing() {
+        let mut s = with_mock(&["日本語"]);
+        type_str(&mut s, "nihongo");
+        let id = s
+            .begin_ai_convert(false, String::new(), String::new())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        assert!(!s.candidates().is_empty());
+        // Typing another letter drops the preview and keeps composing raw romaji.
+        let f = s.process_key(Key::new('u' as u32, 0));
+        assert!(f & flags::CANDIDATES != 0); // signals the window to hide
+        assert!(s.candidates().is_empty());
+        assert_eq!(s.preedit(), "nihongou");
+    }
+
+    #[test]
+    fn begin_returns_none_while_preview_showing() {
+        let mut s = with_mock(&["日本語"]);
+        type_str(&mut s, "nihongo");
+        let id = s
+            .begin_ai_convert(false, String::new(), String::new())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        // A preview is up: begin must return None so the frontend falls through
+        // to process_key (Space → engage), instead of re-running the conversion.
+        assert_eq!(s.begin_ai_convert(true, String::new(), String::new()), None);
     }
 
     #[test]

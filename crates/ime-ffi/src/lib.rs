@@ -26,7 +26,8 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 
 /// Bump when the ABI changes in a backward-incompatible way.
-const ABI_VERSION: u32 = 1;
+/// v2: `rime_begin_ai_convert` gained the `explicit` parameter (Space vs auto).
+const ABI_VERSION: u32 = 2;
 
 // Result-flag bits returned by `rime_process_key` / `rime_select_candidate`,
 // exported into the C header so the Swift (macOS) and C++ (Windows) frontends
@@ -280,9 +281,17 @@ pub extern "C" fn rime_get_commit_text(session: *const RimeSession) -> *const c_
 /// candidates already showing). The conversion runs on an internal background
 /// thread; call [`rime_poll_ai_result`] on the SAME thread as other session
 /// calls until it resolves.
+///
+/// `explicit` distinguishes how the conversion was triggered:
+/// - `true` — the user pressed Space: engage candidate selection on completion,
+///   so Enter then commits the chosen candidate.
+/// - `false` — an idle/typing-pause auto-convert: show a non-committal preview
+///   (preedit stays the raw romaji, Enter commits as-typed). The user presses
+///   Space to engage the preview.
 #[no_mangle]
 pub extern "C" fn rime_begin_ai_convert(
     session: *mut RimeSession,
+    explicit: bool,
     context_before: *const c_char,
     context_after: *const c_char,
 ) -> u64 {
@@ -292,7 +301,9 @@ pub extern "C" fn rime_begin_ai_convert(
     };
     let before = unsafe { cstr_to_string(context_before) };
     let after = unsafe { cstr_to_string(context_after) };
-    s.inner.begin_ai_convert(before, after).unwrap_or(0)
+    s.inner
+        .begin_ai_convert(explicit, before, after)
+        .unwrap_or(0)
 }
 
 /// Poll a conversion started by [`rime_begin_ai_convert`].

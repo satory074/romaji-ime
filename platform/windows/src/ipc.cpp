@@ -15,6 +15,9 @@ void PutString(std::vector<uint8_t>& b, const std::string& s) {
     PutU64(b, s.size());
     b.insert(b.end(), s.begin(), s.end());
 }
+void PutBool(std::vector<uint8_t>& b, bool v) {
+    b.push_back(v ? 1 : 0);  // bincode encodes bool as a single 0/1 byte
+}
 
 // ---- bincode decoder cursor ----------------------------------------------
 
@@ -214,12 +217,13 @@ void PipeClient::CloseSession(uint64_t sid) {
 }
 
 std::optional<uint64_t> PipeClient::BeginAiConvert(uint64_t sid, const std::wstring& before,
-                                                   const std::wstring& after) {
+                                                   const std::wstring& after, bool explicit_) {
     std::vector<uint8_t> req;
     PutU32(req, kReqBeginAiConvert);
     PutU64(req, sid);
     PutString(req, WideToUtf8(before));
     PutString(req, WideToUtf8(after));
+    PutBool(req, explicit_);  // field order matches ime_ipc::Request::BeginAiConvert
     auto resp = Call(req);
     if (!resp) return std::nullopt;
     Reader r{resp->data(), resp->data() + resp->size()};

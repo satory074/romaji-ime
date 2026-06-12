@@ -137,8 +137,16 @@ const char *rime_get_commit_text(const struct RimeSession *session);
  candidates already showing). The conversion runs on an internal background
  thread; call [`rime_poll_ai_result`] on the SAME thread as other session
  calls until it resolves.
+
+ `explicit` distinguishes how the conversion was triggered:
+ - `true` — the user pressed Space: engage candidate selection on completion,
+   so Enter then commits the chosen candidate.
+ - `false` — an idle/typing-pause auto-convert: show a non-committal preview
+   (preedit stays the raw romaji, Enter commits as-typed). The user presses
+   Space to engage the preview.
  */
 uint64_t rime_begin_ai_convert(struct RimeSession *session,
+                               bool explicit_,
                                const char *context_before,
                                const char *context_after);
 

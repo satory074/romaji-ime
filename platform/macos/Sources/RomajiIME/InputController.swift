@@ -54,15 +54,16 @@ final class InputController: IMKInputController {
         DebugLog.log("handle keyCode=\(event.keyCode) -> sym=0x\(String(sym, radix: 16)) mods=\(mods)")
         if sym == 0 { return false }
 
-        // Space triggers immediate AI conversion while composing (auto-convert on
-        // pause does too). Enter does NOT convert — it commits as-is (handled by
-        // the engine). begin returns 0 when AI is unavailable or candidates are
-        // already shown, so we fall through to normal handling.
+        // Space triggers an EXPLICIT AI conversion that engages candidate
+        // selection (so Enter then commits the chosen candidate). begin returns 0
+        // when AI is unavailable OR a preview/candidates are already shown — in
+        // the preview case we fall through to processKey, where Space *engages*
+        // the preview instead of re-running the conversion.
         let isShortcut = mods & ((1 << 2) | (1 << 3)) != 0
         if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
             let (before, after) = Self.surroundingContext(client)
-            let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
-            DebugLog.log("Space -> beginAiConvert id=\(id)")
+            let id = session.beginAiConvert(explicit: true, contextBefore: before, contextAfter: after)
+            DebugLog.log("Space -> beginAiConvert(explicit) id=\(id)")
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
@@ -88,6 +89,10 @@ final class InputController: IMKInputController {
     /// After `autoConvertDelayMs` of no further keys, convert the current
     /// composition automatically. Cancelled if another key arrives (token check)
     /// or if AI is unavailable / nothing is composing (begin returns 0).
+    ///
+    /// This is a NON-EXPLICIT convert (`explicit: false`): it shows a preview
+    /// (preedit stays the raw romaji, Enter commits as-typed) so a pause never
+    /// silently changes what Enter does. The user presses Space to engage it.
     private func scheduleAutoConvert(client: IMKTextInput) {
         guard SharedEngine.shared.autoConvertEnabled else { return }
         let token = autoConvertToken
@@ -96,8 +101,8 @@ final class InputController: IMKInputController {
             guard let self = self, token == self.autoConvertToken, !self.converting else { return }
             guard let session = self.session, !session.preedit().isEmpty else { return }
             let (before, after) = Self.surroundingContext(client)
-            let id = session.beginAiConvert(contextBefore: before, contextAfter: after)
-            DebugLog.log("auto-convert -> beginAiConvert id=\(id)")
+            let id = session.beginAiConvert(explicit: false, contextBefore: before, contextAfter: after)
+            DebugLog.log("auto-convert -> beginAiConvert(preview) id=\(id)")
             if id != 0 { self.startConverting(reqId: id, client: client) }
         }
     }

@@ -53,8 +53,9 @@ impl Dispatcher {
                 sid,
                 context_before,
                 context_after,
+                explicit,
             } => match self.sessions.get_mut(&sid) {
-                Some(s) => match s.begin_ai_convert(context_before, context_after) {
+                Some(s) => match s.begin_ai_convert(explicit, context_before, context_after) {
                     Some(req_id) => Response::AiBegun { req_id },
                     None => Response::Error {
                         message: "AI conversion unavailable".to_owned(),
@@ -187,6 +188,7 @@ mod tests {
             sid,
             context_before: String::new(),
             context_after: String::new(),
+            explicit: true,
         });
         assert!(matches!(resp, Response::Error { .. }));
     }

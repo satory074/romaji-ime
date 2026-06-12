@@ -34,10 +34,14 @@ pub enum Request {
     Reset { sid: u64 },
     /// Kick off an asynchronous cloud-AI conversion; reply is [`Response::AiBegun`].
     /// The current preedit plus surrounding-document context are sent to the LLM.
+    /// `explicit` = true for a Space-triggered convert (engage candidate selection
+    /// on completion); false for a typing-pause auto-convert (non-committal
+    /// preview — preedit stays raw romaji, Enter commits as-typed until engaged).
     BeginAiConvert {
         sid: u64,
         context_before: String,
         context_after: String,
+        explicit: bool,
     },
     /// Poll a previously-begun AI conversion. Reply is [`Response::State`] when
     /// ready, [`Response::Pending`] while in flight, or [`Response::Error`].

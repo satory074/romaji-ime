@@ -275,7 +275,10 @@ static constexpr UINT_PTR kAiTimerId = 1;
 bool CTextService::StartAiConvert(ITfContext* pContext) {
     if (!_pipe || !_hwndTimer) return false;
     // TODO: pass surrounding document text as context (ITfContext range read).
-    auto reqId = _pipe->BeginAiConvert(_sid, L"", L"");
+    // explicit = true: this is the Space-triggered path, so it engages candidate
+    // selection (Enter then commits the chosen candidate). The Windows frontend
+    // has no typing-pause auto-convert yet, so it never sends a preview convert.
+    auto reqId = _pipe->BeginAiConvert(_sid, L"", L"", /*explicit_=*/true);
     if (!reqId) return false;  // unavailable / not composing / candidates already shown
     _aiReqId = *reqId;
     if (_pAiContext) _pAiContext->Release();

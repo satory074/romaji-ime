@@ -25,6 +25,7 @@ sequential per connection.
   declaration order.
 - `String`: `u64` little-endian byte length, then that many UTF-8 bytes.
 - `Vec<T>`: `u64` little-endian element count, then each element encoded in turn.
+- `bool`: a single byte, `0x00` (false) or `0x01` (true).
 - `struct`: fields in declaration order, no tag.
 
 ## Request (variant indices)
@@ -36,7 +37,7 @@ sequential per connection.
 | 2 | `ProcessKey` | `sid: u64`, `keysym: u32`, `mods: u32` |
 | 3 | `SelectCandidate` | `sid: u64`, `index: u64` |
 | 4 | `Reset` | `sid: u64` |
-| 5 | `BeginAiConvert` | `sid: u64`, `context_before: String`, `context_after: String` |
+| 5 | `BeginAiConvert` | `sid: u64`, `context_before: String`, `context_after: String`, `explicit: bool` |
 | 6 | `PollAiResult` | `sid: u64`, `req_id: u64` |
 
 ## Response (variant indices)

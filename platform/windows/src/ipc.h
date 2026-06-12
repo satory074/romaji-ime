@@ -46,8 +46,11 @@ public:
     // Cloud-AI conversion. Begin returns a request id (or nullopt if
     // unavailable); poll it until Ready/Error. Run these OFF the UI thread (the
     // server does a slow LLM call) — see platform/windows/README.md.
+    // explicit_ = true: Space-triggered convert (engages candidate selection so
+    // Enter commits the chosen candidate). false: typing-pause auto-convert
+    // (non-committal preview; Enter commits the raw text until Space engages it).
     std::optional<uint64_t> BeginAiConvert(uint64_t sid, const std::wstring& context_before,
-                                           const std::wstring& context_after);
+                                           const std::wstring& context_after, bool explicit_);
 
     enum class PollKind { Pending, Ready, Error };
     struct PollOutcome {

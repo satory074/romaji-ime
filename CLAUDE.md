@@ -13,9 +13,16 @@ Product decisions that shape the architecture (don't silently reverse them):
 - **No mode switching.** This is the whole point: the user never toggles
   kana/English. While composing, the preedit shows the **raw romaji** (so English
   looks natural), and the AI converts the whole buffer — keeping intended
-  English/Latin (`github`→`GitHub`) while converting the Japanese. **Space** (and
-  the typing pause) convert; **Enter commits the composition as-is** (raw romaji,
-  no AI).
+  English/Latin (`github`→`GitHub`) while converting the Japanese.
+- **"Space converts, Enter commits what you see."** This is the answer to the
+  Enter ambiguity (*sometimes I want Enter to convert, sometimes not*). The
+  typing-pause auto-convert is a **non-committal preview**: candidates show below
+  but the preedit stays the raw romaji, so **Enter commits as-typed**. Pressing
+  **Space** *engages* the conversion (preedit → top candidate, enters Candidates
+  mode); then Enter commits the chosen candidate, more Space cycles. So Enter's
+  meaning never depends on whether the pause happened to fire — only on whether
+  **you** pressed Space. The engine encodes this with the `explicit` flag on
+  `begin_ai_convert` (Space ⇒ `explicit=true` engages; pause ⇒ `false` previews).
 - **Cloud LLM is the headline converter**, not on-device. Runs async with a
   timeout; falls back to the local romaji→kana on error/unavailable.
 - **Never block the host app's input thread.** The slow LLM call runs off the
@@ -66,12 +73,17 @@ protocol. A 64-bit server can serve both 32- and 64-bit DLL clients, but **both
    (X11/IBus-style keysym). The engine never sees OS key codes.
 2. Printable keys append to the session's raw romaji buffer; the frontend shows
    it as the preedit and (macOS) schedules a debounced auto-convert.
-3. On a pause or Space, the frontend calls `begin_ai_convert` (returns a request
-   id; the LLM runs on a background thread) and **polls** on the session thread
-   until ready. On ready the session enters Candidates mode. (Enter while
-   composing commits the raw romaji as-is — no AI.)
-4. Candidates: Space/↓ cycle, ↑ back, number keys / Enter commit, Esc cancels.
-   On error/unavailable the frontend falls back to committing local kana.
+3. On a pause or Space, the frontend calls `begin_ai_convert(explicit, …)`
+   (returns a request id; the LLM runs on a background thread) and **polls** on
+   the session thread until ready. A Space convert (`explicit=true`) enters
+   Candidates mode; a pause auto-convert (`explicit=false`) stays in Composing as
+   a **preview** (candidates listed, preedit still raw, Enter commits as-typed) —
+   the user presses Space to engage it. While a preview is up `begin_ai_convert`
+   returns `None`, so the frontend's Space falls through to `process_key`, which
+   engages the preview rather than re-running the conversion.
+4. Candidates: Space/↓ cycle, ↑ back, number keys / Enter commit, Esc cancels
+   (Esc from a preview just dismisses the suggestions, keeping the romaji). On
+   error/unavailable the frontend falls back to committing local kana.
 
 ## Commands
 
@@ -157,8 +169,9 @@ or `ROMAJI_IME_*` env vars; see `docs/config.example.json`. `Engine::new` is pur
 
 - **Core + macOS (M0–M2): verified working on-device.** Type loose romaji → AI
   converts (incl. mixed English, e.g. `nihongo wo github de kanri` → `日本語を
-  GitHubで管理`); auto-convert on pause; Space converts immediately; Enter
-  commits as-is (raw romaji, no AI);
+  GitHubで管理`); auto-convert on pause shows a **non-committal preview** (Enter
+  commits the raw romaji as-typed); **Space converts/engages** (then Enter commits
+  the chosen candidate);
   candidate-list window below the caret (`CandidateWindow.swift`, custom NSPanel —
   not IMKCandidates) with Space/↓ cycle, number/Enter commit, Esc cancel. Builds
   via `platform/macos/build.sh`.

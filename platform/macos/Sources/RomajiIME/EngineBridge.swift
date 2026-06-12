@@ -90,8 +90,11 @@ final class EngineSession {
 
     /// Start an async cloud-AI conversion; returns a request id, or 0 if
     /// unavailable (no converter, nothing composing, or candidates already shown).
-    func beginAiConvert(contextBefore: String, contextAfter: String) -> UInt64 {
-        rime_begin_ai_convert(ptr, contextBefore, contextAfter)
+    /// `explicit` = true for a Space-triggered convert (engages candidate
+    /// selection); false for the typing-pause auto-convert (non-committal preview
+    /// — preedit stays raw romaji and Enter commits as-typed until Space engages).
+    func beginAiConvert(explicit: Bool, contextBefore: String, contextAfter: String) -> UInt64 {
+        rime_begin_ai_convert(ptr, explicit, contextBefore, contextAfter)
     }
 
     /// Poll: 0 = pending, 1 = ready (preedit/candidates updated), -1 = error.

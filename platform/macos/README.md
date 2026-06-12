@@ -31,10 +31,14 @@ mode to toggle.**
 
 - While composing, the **raw romaji is shown** (so English/identifiers look
   natural). Type Japanese romaji and English freely in one go.
-- **Auto-convert:** ~0.5 s after you stop typing, the AI converts the whole
-  composition. **Space** also converts immediately. **Enter commits the
-  composition as-is** (the raw romaji you see, no AI) — handy for English /
-  things you don't want converted.
+- **"Space converts, Enter commits what you see."** ~0.5 s after you stop typing,
+  the AI converts the whole composition and shows it as a **preview** — the
+  candidates appear below, but the inline text stays the raw romaji, so **Enter
+  commits exactly what you typed** (handy for English / things you don't want
+  converted). Press **Space** to *engage* the conversion (the inline text becomes
+  the top candidate); **Enter** then commits that candidate, and more **Space**
+  cycles. So Enter only converts once **you** asked it to with Space — a pause
+  never silently changes what Enter does.
 - The AI keeps intended English/Latin (e.g. `github`→`GitHub`, `ok`→`OK`) while
   converting the Japanese (e.g. `nihongo wo github de kanri` → `日本語をGitHubで管理`).
 - In the candidate list: **Space/↓** cycle, **↑** back, **number keys / Enter**
