@@ -165,6 +165,14 @@ endpoint), behind the default `cloud-http` feature. Config is read from
 or `ROMAJI_IME_*` env vars; see `docs/config.example.json`. `Engine::new` is pure
 — frontends opt in via `with_ai_from_config()`.
 
+**Config is read once at process start** (macOS: when `SharedEngine` initializes), so
+editing `config.json` does **not** affect the running IME. To apply a change without a
+reinstall, force a fresh process: re-select the input source, or
+`kill` the user IME process (`~/Library/Input Methods/RomajiIME.app/.../RomajiIME` —
+*not* Apple's `JapaneseIM-RomajiTyping`); the system relaunches it and reloads the config.
+`auto_convert: false` makes conversion happen **only on Space** (no typing-pause preview);
+this is also the lever to cut API calls when the cloud provider rate-limits (429).
+
 ## Status
 
 - **Core + macOS (M0–M2): verified working on-device.** Type loose romaji → AI
