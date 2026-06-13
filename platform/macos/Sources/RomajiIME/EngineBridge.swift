@@ -97,6 +97,13 @@ final class EngineSession {
         rime_begin_ai_convert(ptr, explicit, contextBefore, contextAfter)
     }
 
+    /// Start an async cloud-AI reconversion of `text` (e.g. the host selection);
+    /// returns a request id, or 0 if unavailable / `text` is empty. Engages
+    /// candidate selection on completion (like an explicit Tab conversion).
+    func beginReconvert(text: String, contextBefore: String, contextAfter: String) -> UInt64 {
+        rime_begin_reconvert(ptr, text, contextBefore, contextAfter)
+    }
+
     /// Poll: 0 = pending, 1 = ready (preedit/candidates updated), -1 = error.
     func pollAiResult(_ reqId: UInt64) -> Int32 {
         rime_poll_ai_result(ptr, reqId)

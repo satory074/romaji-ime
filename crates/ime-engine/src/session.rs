@@ -206,23 +206,36 @@ impl Session {
     }
 
     fn process_key_composing(&mut self, key: Key) -> u32 {
+        // SPACE inserts a literal space while composing (so English / spaced text
+        // is typeable). When the buffer is empty there is nothing to compose, so it
+        // passes through (return 0) and the host inserts an ordinary space.
         if key.sym == keysym::SPACE {
             if self.raw.is_empty() {
                 return 0;
             }
+            let had_preview = !self.candidates.is_empty();
+            self.raw.push(' ');
+            if had_preview {
+                self.candidates.clear();
+                self.highlighted = 0;
+            }
+            self.refresh_preedit();
+            return flags::CONSUMED | flags::PREEDIT | preview_flag(had_preview);
+        }
+        // TAB is the conversion key (it took over Space's old role). The frontend
+        // prefers AI by calling begin_ai_convert on Tab first; this engine path is
+        // reached only when begin returned None — i.e. a preview is already showing
+        // (Tab *engages* it) or there is no converter (Tab commits as displayed).
+        if key.sym == keysym::TAB {
+            if self.raw.is_empty() {
+                return 0;
+            }
             if !self.candidates.is_empty() {
-                // An auto-convert preview is showing: Space *engages* it (switches
-                // to candidate selection) rather than re-running the conversion.
-                // The frontend reaches here because begin_ai_convert returns None
-                // while a preview is present, so it falls through to process_key.
                 self.mode = Mode::Candidates;
                 self.highlighted = 0;
                 self.refresh_preedit();
                 return flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES;
             }
-            // No preview to engage (AI unavailable): commit as displayed. The
-            // frontend prefers AI by calling begin_ai_convert on Space first; this
-            // is only reached when there is no converter.
             return self.commit_composition();
         }
         if let Some(c) = key.printable_char() {
@@ -301,7 +314,7 @@ impl Session {
             return flags_commit | flags::PREEDIT;
         }
         match key.sym {
-            keysym::SPACE | keysym::DOWN => {
+            keysym::SPACE | keysym::DOWN | keysym::TAB => {
                 self.highlighted = (self.highlighted + 1) % len;
                 self.refresh_preedit();
                 flags::CONSUMED | flags::PREEDIT | flags::CANDIDATES
@@ -398,6 +411,30 @@ impl Session {
             }
         });
         Some(id)
+    }
+
+    /// Begin an asynchronous cloud-AI **reconversion** of already-committed text
+    /// (e.g. a host selection). Seeds the composition with `text` (case
+    /// preserved) and engages candidate selection on completion, bypassing the
+    /// normal compose guards. Returns a request id to poll (use
+    /// [`Session::poll_ai_result`]), or `None` if AI is unavailable or `text` is
+    /// empty. The original text rides along as a romaji fallback candidate, so the
+    /// user can always pick "leave it as it was".
+    pub fn begin_reconvert(
+        &mut self,
+        text: String,
+        context_before: String,
+        context_after: String,
+    ) -> Option<u64> {
+        if self.converter.is_none() || text.is_empty() {
+            return None;
+        }
+        // Seed the buffer as if it had just been typed, then run the normal
+        // explicit-conversion path (which sets Candidates mode on completion).
+        self.clear_all();
+        self.raw = text;
+        self.refresh_preedit();
+        self.begin_ai_convert(true, context_before, context_after)
     }
 
     /// Poll a conversion started by [`Session::begin_ai_convert`]. Returns
@@ -497,12 +534,46 @@ mod tests {
     }
 
     #[test]
-    fn space_commits_kana_when_no_ai() {
+    fn tab_commits_kana_when_no_ai() {
+        // Tab is the conversion key; with no converter it commits as displayed.
+        let mut s = no_ai();
+        type_str(&mut s, "ka");
+        let f = s.process_key(Key::new(keysym::TAB, 0));
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "か");
+    }
+
+    #[test]
+    fn space_inserts_literal_space_when_composing() {
+        // While composing, Space is a literal space (not a convert/commit).
         let mut s = no_ai();
         type_str(&mut s, "ka");
         let f = s.process_key(Key::new(keysym::SPACE, 0));
-        assert!(f & flags::COMMIT != 0);
-        assert_eq!(s.commit_text(), "か");
+        assert!(f & flags::CONSUMED != 0);
+        assert!(f & flags::COMMIT == 0);
+        assert_eq!(s.preedit(), "か "); // offline kana of "ka " keeps the space
+    }
+
+    #[test]
+    fn space_passes_through_when_empty() {
+        // Nothing composing -> Space is not ours; the host inserts a space.
+        let mut s = no_ai();
+        assert_eq!(s.process_key(Key::new(keysym::SPACE, 0)), 0);
+    }
+
+    #[test]
+    fn tab_passes_through_when_empty() {
+        // Nothing composing -> Tab is not ours; the host handles it.
+        let mut s = no_ai();
+        assert_eq!(s.process_key(Key::new(keysym::TAB, 0)), 0);
+    }
+
+    #[test]
+    fn uppercase_preserved_in_ai_mode() {
+        // Mixed-case English is kept verbatim in the preedit (AI shows raw).
+        let mut s = with_mock(&["x"]);
+        type_str(&mut s, "GitHub");
+        assert_eq!(s.preedit(), "GitHub");
     }
 
     #[test]
@@ -704,9 +775,9 @@ mod tests {
     }
 
     // ---- auto-convert PREVIEW (explicit = false) ------------------------
-    // "Space converts, Enter commits what you see": an auto-convert (typing
+    // "Tab converts, Enter commits what you see": an auto-convert (typing
     // pause) is a non-committal preview — Enter still commits the raw romaji
-    // until the user presses Space to engage.
+    // until the user presses Tab to engage.
 
     #[test]
     fn auto_convert_preview_keeps_raw_and_enter_commits_raw() {
@@ -732,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn space_engages_preview_then_enter_commits_candidate() {
+    fn tab_engages_preview_then_enter_commits_candidate() {
         let mut s = with_mock(&["日本語", "にほんご"]);
         type_str(&mut s, "nihongo");
         let id = s
@@ -741,8 +812,8 @@ mod tests {
         poll_until_done(&mut s, id);
         assert_eq!(s.preedit(), "nihongo"); // preview: raw still shown
 
-        // Space engages the preview → top candidate becomes the selection.
-        let f = s.process_key(Key::new(keysym::SPACE, 0));
+        // Tab engages the preview → top candidate becomes the selection.
+        let f = s.process_key(Key::new(keysym::TAB, 0));
         assert!(f & flags::CONSUMED != 0);
         assert_eq!(s.preedit(), "日本語");
         // A further Space now cycles (we're in candidate selection).
@@ -752,6 +823,20 @@ mod tests {
         let f = s.process_key(Key::new(keysym::RETURN, 0));
         assert!(f & flags::COMMIT != 0);
         assert_eq!(s.commit_text(), "にほんご");
+    }
+
+    #[test]
+    fn tab_cycles_in_candidate_mode() {
+        let mut s = with_mock(&["日本語", "にほんご"]);
+        type_str(&mut s, "nihongo");
+        let id = s
+            .begin_ai_convert(true, String::new(), String::new())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        assert_eq!(s.preedit(), "日本語");
+        // Tab cycles forward just like Space/↓ in candidate selection.
+        s.process_key(Key::new(keysym::TAB, 0));
+        assert_eq!(s.preedit(), "にほんご");
     }
 
     #[test]
@@ -781,6 +866,52 @@ mod tests {
         // A preview is up: begin must return None so the frontend falls through
         // to process_key (Space → engage), instead of re-running the conversion.
         assert_eq!(s.begin_ai_convert(true, String::new(), String::new()), None);
+    }
+
+    // ---- reconversion of selected text ---------------------------------
+
+    #[test]
+    fn begin_reconvert_seeds_raw_and_enters_candidates() {
+        let mut s = with_mock(&["日本語", "にほんご"]);
+        let id = s
+            .begin_reconvert("nihongo".into(), "".into(), "".into())
+            .unwrap();
+        assert_eq!(poll_until_done(&mut s, id), AiPoll::Ready);
+        // Engaged candidate selection (explicit), original text as a fallback.
+        assert_eq!(s.preedit(), "日本語");
+        assert!(s.candidates().contains(&"nihongo".to_string()));
+    }
+
+    #[test]
+    fn begin_reconvert_preserves_case() {
+        let mut s = with_mock(&["x"]);
+        let id = s
+            .begin_reconvert("GitHub".into(), "".into(), "".into())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        // Original-case text survives as a fallback candidate.
+        assert!(s.candidates().contains(&"GitHub".to_string()));
+    }
+
+    #[test]
+    fn begin_reconvert_none_without_converter_or_empty() {
+        let mut s = no_ai();
+        assert_eq!(s.begin_reconvert("x".into(), "".into(), "".into()), None);
+        let mut s2 = with_mock(&["x"]);
+        assert_eq!(s2.begin_reconvert("".into(), "".into(), "".into()), None);
+    }
+
+    #[test]
+    fn reconvert_commit_clears_state() {
+        let mut s = with_mock(&["日本語"]);
+        let id = s
+            .begin_reconvert("nihongo".into(), "".into(), "".into())
+            .unwrap();
+        poll_until_done(&mut s, id);
+        let f = s.select_candidate(0);
+        assert!(f & flags::COMMIT != 0);
+        assert_eq!(s.commit_text(), "日本語");
+        assert!(s.is_empty());
     }
 
     #[test]

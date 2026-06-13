@@ -14,15 +14,18 @@ Product decisions that shape the architecture (don't silently reverse them):
   kana/English. While composing, the preedit shows the **raw romaji** (so English
   looks natural), and the AI converts the whole buffer — keeping intended
   English/Latin (`github`→`GitHub`) while converting the Japanese.
-- **"Space converts, Enter commits what you see."** This is the answer to the
-  Enter ambiguity (*sometimes I want Enter to convert, sometimes not*). The
-  typing-pause auto-convert is a **non-committal preview**: candidates show below
-  but the preedit stays the raw romaji, so **Enter commits as-typed**. Pressing
-  **Space** *engages* the conversion (preedit → top candidate, enters Candidates
-  mode); then Enter commits the chosen candidate, more Space cycles. So Enter's
-  meaning never depends on whether the pause happened to fire — only on whether
-  **you** pressed Space. The engine encodes this with the `explicit` flag on
-  `begin_ai_convert` (Space ⇒ `explicit=true` engages; pause ⇒ `false` previews).
+- **"Tab converts, Space inserts a space, Enter commits what you see."** This is
+  the answer to the Enter ambiguity (*sometimes I want Enter to convert, sometimes
+  not*). The typing-pause auto-convert is a **non-committal preview**: candidates
+  show below but the preedit stays the raw romaji, so **Enter commits as-typed**.
+  Pressing **Tab** *engages* the conversion (preedit → top candidate, enters
+  Candidates mode); then Enter commits the chosen candidate, Space/Tab/↓ cycle. So
+  Enter's meaning never depends on whether the pause happened to fire — only on
+  whether **you** pressed Tab. The engine encodes this with the `explicit` flag on
+  `begin_ai_convert` (Tab ⇒ `explicit=true` engages; pause ⇒ `false` previews).
+  **Space is a literal space while composing** (so English / spaced text is
+  typeable); only when the buffer is empty does Space pass through to the host.
+  (Historically Space was the convert key — changed to Tab so spaces are typeable.)
 - **Cloud LLM is the headline converter**, not on-device. Runs async with a
   timeout; falls back to the local romaji→kana on error/unavailable.
 - **Never block the host app's input thread.** The slow LLM call runs off the
@@ -59,7 +62,8 @@ dict/              Build tool: SudachiDict → binary trie/cost tables (M3, stub
 xtask/             Dev automation (gen-header today).
 platform/macos/    Swift IMK .app (built by build.sh, no Xcode project).
 platform/windows/  C++ TSF TIP DLL + ipc client (built on Windows/CI via CMake).
-docs/              c-abi / ipc-protocol specs, config.example.json.
+docs/              ipc-protocol spec, config.example.json (the C-ABI spec is the
+                   generated header crates/ime-ffi/include/romaji_ime.h).
 ```
 
 **One workspace, two outputs** by crate split (not `cfg`): macOS builds `ime-ffi`
@@ -73,17 +77,23 @@ protocol. A 64-bit server can serve both 32- and 64-bit DLL clients, but **both
    (X11/IBus-style keysym). The engine never sees OS key codes.
 2. Printable keys append to the session's raw romaji buffer; the frontend shows
    it as the preedit and (macOS) schedules a debounced auto-convert.
-3. On a pause or Space, the frontend calls `begin_ai_convert(explicit, …)`
+3. On a pause or Tab, the frontend calls `begin_ai_convert(explicit, …)`
    (returns a request id; the LLM runs on a background thread) and **polls** on
-   the session thread until ready. A Space convert (`explicit=true`) enters
+   the session thread until ready. A Tab convert (`explicit=true`) enters
    Candidates mode; a pause auto-convert (`explicit=false`) stays in Composing as
    a **preview** (candidates listed, preedit still raw, Enter commits as-typed) —
-   the user presses Space to engage it. While a preview is up `begin_ai_convert`
-   returns `None`, so the frontend's Space falls through to `process_key`, which
-   engages the preview rather than re-running the conversion.
-4. Candidates: Space/↓ cycle, ↑ back, number keys / Enter commit, Esc cancels
+   the user presses Tab to engage it. While a preview is up `begin_ai_convert`
+   returns `None`, so the frontend's Tab falls through to `process_key`, which
+   engages the preview rather than re-running the conversion. (Space while
+   composing inserts a literal space; Tab on an empty buffer + a host selection
+   triggers `begin_reconvert` — see Reconversion below.)
+4. Candidates: Space/Tab/↓ cycle, ↑ back, number keys / Enter commit, Esc cancels
    (Esc from a preview just dismisses the suggestions, keeping the romaji). On
    error/unavailable the frontend falls back to committing local kana.
+5. Reconversion (macOS): with nothing composing, Tab on a non-empty host selection
+   reads the selected text and calls `begin_reconvert(text, …)`. Candidates show in
+   the window; the selection is **replaced only on commit** (`insertText` with the
+   saved `replacementRange`), so Esc leaves the original intact.
 
 ## Commands
 
@@ -131,9 +141,11 @@ use the file log (below) + Console.app.
   other session calls. Only the HTTP request runs on another thread (it writes a
   shared slot); the `Session` is never touched concurrently. A frontend keystroke
   cancels any in-flight/pending conversion.
-- **macOS Shift+symbol** uses `event.characters` (the actual produced char, so
-  Shift+1 → "!"); only ASCII letters are lowercased to keep romaji
-  case-insensitive. Ctrl/Alt combos are shortcuts, not text.
+- **macOS Shift+symbol/letter** uses `event.characters` (the actual produced
+  char, so Shift+1 → "!" and Shift+a → "A"). **Case is preserved** end-to-end:
+  the raw buffer / preedit keep the original case (so `GitHub` is typeable), and
+  `romaji::convert` normalizes to lowercase *internally* for offline kana. Ctrl/Alt
+  combos are shortcuts, not text.
 - **ureq with only the `native-tls` feature** needs an explicit
   `.tls_connector(...)` or HTTPS fails instantly. native-tls (SChannel on
   Windows) is chosen so it cross-compiles without ring/OpenSSL.
@@ -178,23 +190,30 @@ this is also the lever to cut API calls when the cloud provider rate-limits (429
 - **Core + macOS (M0–M2): verified working on-device.** Type loose romaji → AI
   converts (incl. mixed English, e.g. `nihongo wo github de kanri` → `日本語を
   GitHubで管理`); auto-convert on pause shows a **non-committal preview** (Enter
-  commits the raw romaji as-typed); **Space converts/engages** (then Enter commits
-  the chosen candidate);
-  candidate-list window below the caret (`CandidateWindow.swift`, custom NSPanel —
-  not IMKCandidates) with Space/↓ cycle, number/Enter commit, Esc cancel. Builds
-  via `platform/macos/build.sh`.
+  commits the raw romaji as-typed); **Tab converts/engages** (then Enter commits
+  the chosen candidate); **Space is a literal space** while composing and
+  **uppercase is typeable** (case preserved); **Tab on a host selection
+  reconverts** it (replaced on commit). Candidate-list window below the caret
+  (`CandidateWindow.swift`, custom NSPanel — not IMKCandidates) with Space/Tab/↓
+  cycle, number/Enter commit, Esc cancel. Builds via `platform/macos/build.sh`.
 - **Windows (code complete, build/verify on Windows):** `ime-server` (Rust) hosts
   the engine + AI over a named pipe; cross-compiles for x86_64/i686-pc-windows-msvc;
   dispatcher/transport unit-tested. The C++ TSF DLL does romaji→kana, Enter-commits-
   as-is, and **async AI on Space** (message-only window + WM_TIMER polling the fast
   IPC off the keystroke path; inline candidate rendering). Cannot be compiled on
   macOS — build/iterate on Windows. Full `ITfCandidateListUIElement` list window is
-  the remaining UI item. See `platform/windows/README.md`.
+  the remaining UI item. See `platform/windows/README.md`. **NOTE:** the engine now
+  uses **Tab=convert / Space=literal-space** and preserves case, but the C++ DLL
+  still triggers convert on Space and lowercases — `TextService.cpp` needs the
+  parallel update (Space→Tab trigger, add Tab to the eaten set, drop A–Z lowercasing)
+  next time it's built; reconversion on Windows is separate (IPC+TSF) work.
 
 Done since: M4 usage learning (learning.rs, JSON store); romaji fallback candidates;
 configurable auto-convert; CI (Windows DLL builds + artifacts, macOS app); macOS M5
 distribution tooling (package.sh → signed/notarized .pkg, gated on Developer ID
 certs; release.yml CI). M3 (local dictionary) intentionally dropped — AI is the baseline.
+Input-model overhaul (macOS): Tab=convert, Space=literal-space, case-preserving
+input, and selection reconversion (`rime_begin_reconvert`, ABI v3).
 
 Pending: Windows runtime testing + full ITfCandidateListUIElement window (needs a
 Windows machine — code builds in CI); Windows installer + Authenticode signing;

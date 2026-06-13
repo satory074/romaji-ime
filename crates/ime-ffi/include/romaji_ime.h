@@ -151,6 +151,20 @@ uint64_t rime_begin_ai_convert(struct RimeSession *session,
                                const char *context_after);
 
 /*
+ Begin an asynchronous cloud-AI **reconversion** of already-committed text
+ (e.g. the host app's current selection). Seeds the composition with `text`
+ (case preserved) and engages candidate selection on completion (like an
+ explicit Tab conversion), bypassing the normal compose guards. Returns a
+ request id to poll with [`rime_poll_ai_result`], or 0 if AI is unavailable or
+ `text` is empty. The original text is kept as a fallback candidate so the user
+ can leave it unchanged.
+ */
+uint64_t rime_begin_reconvert(struct RimeSession *session,
+                              const char *text,
+                              const char *context_before,
+                              const char *context_after);
+
+/*
  Poll a conversion started by [`rime_begin_ai_convert`].
  Returns: 0 = pending, 1 = ready/final (candidates/preedit updated), 2 =
  streaming (partial candidates updated, keep polling), -1 = error/unavailable

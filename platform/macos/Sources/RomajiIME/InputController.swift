@@ -15,6 +15,9 @@ final class InputController: IMKInputController {
     private var converting = false
     /// Monotonic token; bumped on every key to cancel a pending auto-convert.
     private var autoConvertToken = 0
+    /// While reconverting a host selection: the range to replace on commit. The
+    /// document is left untouched until commit, so cancelling keeps the original.
+    private var reconvertRange: NSRange?
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
@@ -54,16 +57,47 @@ final class InputController: IMKInputController {
         DebugLog.log("handle keyCode=\(event.keyCode) -> sym=0x\(String(sym, radix: 16)) mods=\(mods)")
         if sym == 0 { return false }
 
-        // Space triggers an EXPLICIT AI conversion that engages candidate
-        // selection (so Enter then commits the chosen candidate). begin returns 0
-        // when AI is unavailable OR a preview/candidates are already shown — in
-        // the preview case we fall through to processKey, where Space *engages*
-        // the preview instead of re-running the conversion.
+        // Cancel an in-progress selection reconversion: Esc abandons it. The host
+        // selection was never modified (we only replace on commit), so it stays.
+        if reconvertRange != nil, sym == 0xFF1B {
+            session.reset()
+            reconvertRange = nil
+            CandidateWindow.shared.hide()
+            DebugLog.log("Esc -> cancel reconvert (selection left intact)")
+            return true
+        }
+
+        // Tab triggers an EXPLICIT AI conversion that engages candidate selection
+        // (so Enter then commits the chosen candidate). Space is a literal space
+        // while composing — see the engine. begin returns 0 when AI is unavailable
+        // OR a preview/candidates are already shown — in the preview case we fall
+        // through to processKey, where Tab *engages* the preview instead of
+        // re-running the conversion.
         let isShortcut = mods & ((1 << 2) | (1 << 3)) != 0
-        if sym == 0x20 && !isShortcut && !Self.isSecureInput() {
+        // Tab on a host SELECTION (with nothing being composed) reconverts that
+        // selection — no new keybinding. The document is replaced only on commit
+        // (see applyResult), so cancelling leaves the original selection intact.
+        if sym == 0xFF09 && !isShortcut && !Self.isSecureInput()
+            && session.preedit().isEmpty {
+            let sel = client.selectedRange()
+            if sel.location != NSNotFound, sel.length > 0,
+               let attr = client.attributedSubstring(from: sel) {
+                let selected = attr.string
+                let (before, after) = Self.reconvertContext(client, sel: sel)
+                let id = session.beginReconvert(
+                    text: selected, contextBefore: before, contextAfter: after)
+                DebugLog.log("Tab(selection) -> beginReconvert id=\(id) len=\(sel.length)")
+                if id != 0 {
+                    reconvertRange = sel
+                    startConverting(reqId: id, client: client)
+                    return true
+                }
+            }
+        }
+        if sym == 0xFF09 && !isShortcut && !Self.isSecureInput() {
             let (before, after) = Self.surroundingContext(client)
             let id = session.beginAiConvert(explicit: true, contextBefore: before, contextAfter: after)
-            DebugLog.log("Space -> beginAiConvert(explicit) id=\(id)")
+            DebugLog.log("Tab -> beginAiConvert(explicit) id=\(id)")
             if id != 0 {
                 startConverting(reqId: id, client: client)
                 return true
@@ -107,11 +141,13 @@ final class InputController: IMKInputController {
         }
     }
 
-    /// Insert any committed text and refresh the marked (preedit) text.
+    /// Insert any committed text and refresh the marked (preedit) text. When
+    /// reconverting a host selection, the commit replaces that selection.
     private func applyResult(session: EngineSession, client: IMKTextInput) {
         let commit = session.commitText()
         if !commit.isEmpty {
-            client.insertText(commit, replacementRange: Self.noRange)
+            client.insertText(commit, replacementRange: reconvertRange ?? Self.noRange)
+            reconvertRange = nil
         }
         render(session, client: client)
     }
@@ -119,7 +155,11 @@ final class InputController: IMKInputController {
     /// Reflect the session state: update the inline marked text AND the candidate
     /// list window (shown below the caret, hidden when there are no candidates).
     private func render(_ session: EngineSession, client: IMKTextInput) {
-        updateMarkedText(session.preedit(), client: client)
+        // During selection reconversion we must NOT write marked text over the
+        // live host selection (it stays intact until commit) — candidates only.
+        if reconvertRange == nil {
+            updateMarkedText(session.preedit(), client: client)
+        }
         let count = session.candidateCount()
         if count > 0 {
             var list: [String] = []
@@ -178,6 +218,7 @@ final class InputController: IMKInputController {
 
     private func commitCurrent(to client: IMKTextInput) {
         guard let session = session else { return }
+        reconvertRange = nil  // abandon any in-progress reconvert cleanly
         let preedit = session.preedit()
         if !preedit.isEmpty {
             client.insertText(preedit, replacementRange: Self.noRange)
@@ -227,14 +268,13 @@ final class InputController: IMKInputController {
         }
 
         // Printable: use the ACTUALLY produced character so Shift yields symbols
-        // (Shift+1 -> "!", Shift+/ -> "?"), but lowercase ASCII letters so romaji
-        // stays case-insensitive. Ctrl/Alt combos are shortcuts, not text.
+        // (Shift+1 -> "!", Shift+/ -> "?") AND uppercase letters (Shift+a -> "A").
+        // Case is preserved end-to-end: the engine keeps the original-case raw for
+        // AI/preedit and normalizes to lowercase only for offline romaji->kana.
+        // Ctrl/Alt combos are shortcuts, not text.
         if mods & ((1 << 2) | (1 << 3)) == 0,
            let scalar = event.characters?.unicodeScalars.first {
-            var v = scalar.value
-            if (0x41...0x5A).contains(v) {
-                v += 0x20 // 'A'..'Z' -> 'a'..'z'
-            }
+            let v = scalar.value
             if (0x21...0x7E).contains(v) {
                 return (v, mods)
             }
@@ -256,6 +296,24 @@ final class InputController: IMKInputController {
         }
         var after = ""
         if let attr = client.attributedSubstring(from: NSRange(location: sel.location, length: 20)) {
+            after = attr.string
+        }
+        return (before, after)
+    }
+
+    /// Context for reconverting a selection: text just left of the selection and
+    /// just right of its end. Fails soft to ("", "") where the host won't report it.
+    static func reconvertContext(_ client: IMKTextInput, sel: NSRange) -> (String, String) {
+        var before = ""
+        let beforeLen = min(20, sel.location)
+        if beforeLen > 0,
+           let attr = client.attributedSubstring(
+               from: NSRange(location: sel.location - beforeLen, length: beforeLen)) {
+            before = attr.string
+        }
+        var after = ""
+        let afterStart = sel.location + sel.length
+        if let attr = client.attributedSubstring(from: NSRange(location: afterStart, length: 20)) {
             after = attr.string
         }
         return (before, after)

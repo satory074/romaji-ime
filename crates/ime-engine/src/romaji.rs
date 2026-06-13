@@ -101,6 +101,11 @@ fn is_sokuon_consonant(c: char) -> bool {
 /// Convert a raw romaji buffer into `(kana, pending)`, where `pending` is the
 /// trailing romaji that has not yet resolved to kana.
 pub fn convert(raw: &str) -> (String, String) {
+    // Romaji is case-insensitive: normalize so uppercase letters (which the
+    // frontend now preserves in the raw buffer for English/identifiers) still
+    // match the lowercase conversion table. The session keeps the original-case
+    // `raw` for AI/preedit; only this offline transliteration is normalized.
+    let raw = raw.to_lowercase();
     let chars: Vec<char> = raw.chars().collect();
     let n = chars.len();
     let mut out = String::new();
@@ -211,6 +216,17 @@ mod tests {
         assert_eq!(convert("shi").0, "し");
         assert_eq!(convert("tsu").0, "つ");
         assert_eq!(convert("a").0, "あ");
+    }
+
+    #[test]
+    fn uppercase_input_normalizes() {
+        // The frontend now preserves case in the raw buffer; offline kana
+        // conversion must still match the lowercase table.
+        assert_eq!(convert("Ka").0, "か");
+        assert_eq!(convert("KONNICHIHA").0, "こんにちは");
+        assert_eq!(flush("Hon"), "ほん");
+        // Mixed case with a literal space (Space-as-space) round-trips too.
+        assert_eq!(convert("A I").0, "あ い");
     }
 
     #[test]
